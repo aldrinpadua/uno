@@ -279,7 +279,7 @@ class CloudStore {
     if (already) return { ok: false, name: already.name, already: true };
     l.memberIds = [...new Set([...l.memberIds, personId])]; this._notify();
     await this._try("add friend to ledger", () => this.sb.from("ledger_members").upsert(this._memberRow(ledgerId, personId), { onConflict: "ledger_id,member_ref" }));
-    const emailed = person.email ? await this._notifyMember("added", person.email, person.name, l.name) : false;
+    const emailed = person.email ? await this._notifyMember("added", person.email, person.name, l.name, l.kind === "individual" ? "friend" : "group") : false;
     return { ok: true, emailed, name: person.name };
   }
 
@@ -342,7 +342,7 @@ class CloudStore {
       else { person.userId = user.id; if (resolvedEmail) person.email = resolvedEmail; if (user.username) person.username = user.username; }
       l.memberIds = [...new Set([...l.memberIds, user.id])]; this._notify();
       await this._try("add member", () => this.sb.from("ledger_members").upsert(this._memberRow(ledgerId, user.id), { onConflict: "ledger_id,member_ref" }));
-      const emailed = person.email ? await this._notifyMember("added", person.email, person.name, l.name) : false;
+      const emailed = person.email ? await this._notifyMember("added", person.email, person.name, l.name, l.kind === "individual" ? "friend" : "group") : false;
       return { status: "added", name: person.name, emailed };
     }
 
@@ -355,15 +355,15 @@ class CloudStore {
     this.state.people.push(person);
     l.memberIds = [...new Set([...l.memberIds, ref])]; this._notify();
     await this._try("invite", () => this.sb.from("ledger_members").insert(this._memberRow(ledgerId, ref)));
-    const emailed = await this._notifyMember("invite", email, person.name, l.name);
+    const emailed = await this._notifyMember("invite", email, person.name, l.name, l.kind === "individual" ? "friend" : "group");
     return { status: "invited", email, name: person.name, link: appUrl(), emailed };
   }
 
   // Fire the notify-member edge function; returns true if the email was sent.
-  async _notifyMember(type, email, name, groupName) {
+  async _notifyMember(type, email, name, groupName, context = "group") {
     try {
       const { data, error } = await this.sb.functions.invoke("notify-member", {
-        body: { type, email, name, groupName, inviterName: this.state.you.name, link: appUrl() },
+        body: { type, email, name, groupName, context, inviterName: this.state.you.name, link: appUrl() },
       });
       if (error) throw error;
       return data?.ok !== false;
