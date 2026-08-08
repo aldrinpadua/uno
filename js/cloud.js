@@ -51,6 +51,27 @@ function resetTurnstile() {
   if (_turnstileId !== null && window.turnstile) { try { window.turnstile.reset(_turnstileId); } catch {} }
 }
 
+// ---------- auto sign-out after inactivity ----------
+const IDLE_MINUTES = 10; // sign out after this many minutes with no activity
+let _idleTimer = null;
+function startIdleLogout() {
+  if (_idleTimer) return; // already running for this session
+  let last = Date.now();
+  const bump = () => { last = Date.now(); };
+  // any of these count as "active"
+  ["mousemove", "mousedown", "keydown", "wheel", "scroll", "touchstart", "click"].forEach(
+    (ev) => window.addEventListener(ev, bump, { passive: true }));
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) bump(); });
+  // check periodically — robust to the laptop sleeping (a single timeout could fire late)
+  _idleTimer = setInterval(() => {
+    if (Date.now() - last >= IDLE_MINUTES * 60 * 1000) {
+      clearInterval(_idleTimer); _idleTimer = null;
+      try { localStorage.setItem("uno.idleOut", "1"); } catch {}
+      signOut();
+    }
+  }, 15000);
+}
+
 async function getClient() {
   if (supabase) return supabase;
   const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
@@ -511,6 +532,8 @@ export async function startCloud() {
     );
     // when auth completes (magic link click / OAuth return) reload to re-run boot
     sb.auth.onAuthStateChange((event) => { if (event === "SIGNED_IN") window.location.reload(); });
+    // let them know why they landed back here, if it was an idle timeout
+    try { if (localStorage.getItem("uno.idleOut")) { localStorage.removeItem("uno.idleOut"); loginMsg(`You were signed out after ${IDLE_MINUTES} minutes of inactivity. Sign in again to continue.`, true); } } catch {}
     return false;
   }
 
@@ -521,6 +544,7 @@ export async function startCloud() {
   store.state.you.email = myEmail;
   setStore(store);
   await store.hydrate();
+  startIdleLogout(); // begin the inactivity countdown
   return true;
 }
 
