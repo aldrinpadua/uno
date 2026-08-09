@@ -184,6 +184,9 @@ class CloudStore {
     this.listeners = new Set();
     this.isPlatformAdmin = false; // one of the three platform admins?
     this.nameById = new Map();    // member_ref -> {name,...} for anyone (active/pending/left)
+    this.messageListeners = new Set(); // realtime message-change subscribers (the UI)
+    this.activeChat = null;       // chat currently open (so its incoming msgs don't count unread)
+    this._rtChannel = null;
     // my member_ref can differ per ledger: it's my auth id in ledgers I created,
     // but a generated "pending" id in ledgers I was invited to. Track per ledger.
     this.myRefByLedger = {};
@@ -442,6 +445,35 @@ class CloudStore {
     this.state.chats = (this.state.chats || []).filter((c) => c.id !== chatId); this._notify();
     await this._try("clear chat", () => this.sb.rpc("clear_chat", { p_chat: chatId }));
     return { ok: true };
+  }
+  // ---- realtime (live messages + unread badges) ----
+  onMessage(fn) { this.messageListeners.add(fn); return () => this.messageListeners.delete(fn); }
+  startRealtime() {
+    if (this._rtChannel) return;
+    try {
+      this._rtChannel = this.sb.channel("uno-messages")
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, (p) => this._onMessageEvent(p))
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages" }, (p) => this._onMessageEvent(p))
+        .subscribe();
+    } catch (e) { console.error("[cloud] realtime subscribe failed:", e.message || e); }
+  }
+  async _onMessageEvent(payload) {
+    const row = payload.new || payload.old; if (!row) return;
+    const chatId = row.chat_id;
+    if (payload.eventType === "INSERT") {
+      const c = this.chatMeta(chatId);
+      if (!c) { await this.loadChats(); } // a new or reappearing chat
+      else {
+        c.lastBody = row.deleted ? "message deleted" : (row.body || "");
+        c.lastAt = row.created_at ? new Date(row.created_at).getTime() : Date.now();
+        if (row.sender !== myId && this.activeChat !== chatId) c.unread = (c.unread || 0) + 1;
+        (this.state.chats || []).sort((a, b) => b.lastAt - a.lastAt);
+      }
+    } else {
+      await this.loadChats(); // edits/deletes → refresh previews & counts
+    }
+    this._notify();
+    this.messageListeners.forEach((fn) => { try { fn({ chatId, eventType: payload.eventType }); } catch {} });
   }
   async markChatRead(chatId) {
     const c = this.chatMeta(chatId); if (c) c.unread = 0; this._notify();

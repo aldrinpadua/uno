@@ -14,6 +14,12 @@ const FREQ = { daily: "Every day", every3: "Every 3 days", weekly: "Weekly", biw
 const CLOUD = CONFIG.MODE === "cloud"; // cloud mode = accounts; add people by email only
 
 let view = { type: "dashboard", ledgerId: null, tab: "expenses" };
+let _chatHook = null; // set by renderChat so realtime can live-update the open thread
+function onRealtime(evt) {
+  updateInboxBadge();
+  if (view.type === "chat") { if (_chatHook) _chatHook(evt); }
+  else if (view.type === "messages") renderMessages();
+}
 
 // ---------- helpers ----------
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -396,6 +402,11 @@ async function renderChat(chatId) {
   if (view.type !== "chat" || view.chatId !== chatId) return; // navigated away
   paint(current);
   store.markChatRead(chatId).then(() => updateInboxBadge());
+  // live updates for this open thread (new messages, edits, deletes)
+  _chatHook = (evt) => {
+    if (view.type === "chat" && view.chatId === chatId && evt.chatId === chatId)
+      reload().then(() => store.markChatRead(chatId).then(() => updateInboxBadge()));
+  };
 
   const send = async () => {
     const inp = $("#msgInput"); const text = inp.value.trim(); if (!text) return;
@@ -1531,6 +1542,7 @@ function wireMobile() {
 
 // ---------- boot ----------
 function render() {
+  if (CLOUD && store) store.activeChat = (view.type === "chat" ? view.chatId : null);
   renderSidebar();
   if (view.type === "dashboard") renderDashboard();
   else if (view.type === "friends") renderFriends();
@@ -1660,6 +1672,8 @@ async function boot() {
     addInboxNav();
     addAdminNav();
     wireInboxRefresh();
+    if (store.onMessage) store.onMessage(onRealtime);
+    if (store.startRealtime) store.startRealtime();
     restoreView();
     render();
     if (!store.state.you.username) openUsernameModal(true); // required on first sign-in
