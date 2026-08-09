@@ -707,10 +707,8 @@ function renderMembers(body, l) {
   // Leave section — any member can leave a group/trip (creator deletes instead).
   const leaveHtml = (CLOUD && l.kind !== "individual") ? `
     <div class="card" style="margin-top:16px">
-      ${l.iAmOwner
-        ? `<div class="exp-meta">You created this ${kindLabel[l.kind].toLowerCase()}. To remove it, use <b>Settings → Delete</b>.</div>`
-        : `<button class="btn danger" id="leaveLedger">🚪 Leave ${esc(ledgerDisplayName(l))}</button>
-           <div class="hint" style="margin-top:6px">You'll be removed and stop seeing its expenses. You can only leave once your balance here is settled up.</div>`}
+      <button class="btn danger" id="leaveLedger">🚪 Leave ${esc(ledgerDisplayName(l))}</button>
+      <div class="hint" style="margin-top:6px">You'll be removed and stop seeing its expenses. You can only leave once your balance here is settled up.${l.iAmOwner ? ` Since you created this ${kindLabel[l.kind].toLowerCase()}, the remaining members become admins so it stays managed (it isn't deleted).` : ""}</div>
     </div>` : "";
   const pendingHtml = (CLOUD && (l.pendingInvites || []).length) ? `
     <h3 style="margin:20px 0 8px">Pending invitations</h3>
@@ -984,8 +982,10 @@ function openPersonModal(id) {
   const showUser = id === "you" && CLOUD;
   modal(id === "you" ? "Your profile" : "Edit person", `
     <label>Name</label><input id="pName" value="${esc(m.name)}">
-    <label>Email ${id === "you" ? "(so reminders are sent from a name people recognize)" : "(for reminders)"}</label>
-    <input id="pEmail" value="${esc(m.email || "")}" placeholder="name@example.com">
+    ${showUser
+      ? `<label>Email <span class="exp-meta">· your sign-in address</span></label>
+         <div class="row"><input value="${esc(m.email || "")}" readonly style="opacity:.85"><button class="btn ghost" id="pChangeEmail" style="flex:none">Change</button></div>`
+      : `<label>Email (for reminders)</label><input id="pEmail" value="${esc(m.email || "")}" placeholder="name@example.com">`}
     ${showUser ? `<label>Username</label>
       ${store.state.you.username
         ? `<div class="mail-preview">@${esc(store.state.you.username)} <span class="exp-meta">· permanent, can't be changed</span></div>`
@@ -997,6 +997,7 @@ function openPersonModal(id) {
       </div>` : ""}
   `, `<button class="btn ghost" data-close>Cancel</button><button class="btn" id="pSave">Save</button>`);
   if (showUser && $("#pUserBtn")) $("#pUserBtn").onclick = () => { closeModal(); openUsernameModal(false); };
+  if ($("#pChangeEmail")) $("#pChangeEmail").onclick = () => { closeModal(); openChangeEmailModal(); };
   let pickedColor = store.state.you.color || null;
   if (showUser) $("#avSwatches").querySelectorAll("[data-color]").forEach((s) => s.onclick = () => {
     pickedColor = s.dataset.color;
@@ -1004,10 +1005,33 @@ function openPersonModal(id) {
     const pv = $("#avPreview"); if (pv) pv.style.background = pickedColor;
   });
   $("#pSave").onclick = async () => {
-    store.updatePerson(id, { name: $("#pName").value.trim() || m.name, email: $("#pEmail").value.trim() });
+    const patch = { name: $("#pName").value.trim() || m.name };
+    if ($("#pEmail")) patch.email = $("#pEmail").value.trim(); // own email is read-only (changed via the verified flow)
+    store.updatePerson(id, patch);
     if (showUser && pickedColor !== (store.state.you.color || null)) await store.setAvatarColor(pickedColor);
     closeModal(); render(); toast("Saved.");
   };
+}
+
+// Verified email change — Supabase sends a confirmation link; the login email
+// only changes once it's clicked.
+function openChangeEmailModal() {
+  modal("Change email", `
+    <p class="hint" style="margin-top:0">Your email is how you sign in. We'll send a confirmation link to the new address — the change only takes effect once you click it.</p>
+    <label>Current</label><div class="mail-preview">${esc(store.state.you.email || "")}</div>
+    <label>New email</label>
+    <input id="ceInput" type="email" autocapitalize="off" spellcheck="false" placeholder="new@example.com">
+    <div id="ceMsg" style="margin-top:10px"></div>
+  `, `<button class="btn ghost" data-close>Cancel</button><button class="btn" id="ceSend">Send confirmation</button>`);
+  $("#ceSend").onclick = async () => {
+    const v = $("#ceInput").value.trim();
+    if (!v) return toast("Enter the new email.");
+    const btn = $("#ceSend"); btn.disabled = true; $("#ceMsg").innerHTML = `<span class="hint">Sending…</span>`;
+    const r = await store.changeEmail(v); btn.disabled = false;
+    if (r.ok) $("#ceMsg").innerHTML = `<span class="pos">✅ Confirmation sent to ${esc(v)}. If asked, also confirm from your current inbox. Your sign-in email updates once you click the link.</span>`;
+    else $("#ceMsg").innerHTML = `<span class="neg">${esc(r.error)}</span>`;
+  };
+  setTimeout(() => { const i = $("#ceInput"); if (i) i.focus(); }, 30);
 }
 
 // Username picker with a LIVE availability check against the database.

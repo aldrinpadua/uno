@@ -212,6 +212,11 @@ class CloudStore {
       }
     });
     you.email = (you.email || myEmail || "").toLowerCase();
+    // If the auth (login) email changed via the verified flow, sync the profile copy.
+    if (myEmail && you.email !== (myEmail || "").toLowerCase()) {
+      you.email = (myEmail || "").toLowerCase();
+      this._try("sync login email", () => this.sb.from("profiles").update({ email: you.email }).eq("id", myId));
+    }
 
     // Claim any pending invites addressed to my email (sets user_id on rows the
     // inviter created for me before I had an account) — so I become a real,
@@ -366,6 +371,18 @@ class CloudStore {
   async setAvatarColor(color) {
     this.state.you.color = color || null; this._notify();
     await this._try("avatar color", () => this.sb.from("profiles").update({ avatar_color: color || null }).eq("id", myId));
+    return { ok: true };
+  }
+  // Start a verified email change: Supabase emails a confirmation link to the new
+  // address (and, if "Secure email change" is on, the current one too). The login
+  // email only changes once they click it; the app syncs profiles/member copies
+  // on the next load (see hydrate).
+  async changeEmail(newEmail) {
+    const email = (newEmail || "").trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { ok: false, error: "Enter a valid email address." };
+    if (email === (this.state.you.email || "").toLowerCase()) return { ok: false, error: "That's already your email." };
+    const { error } = await this.sb.auth.updateUser({ email }, { emailRedirectTo: appUrl() });
+    if (error) return { ok: false, error: error.message };
     return { ok: true };
   }
   isFriend(userId) { return !!userId && (this.state.friends || []).some((f) => f.userId === userId || f.id === userId); }
@@ -724,18 +741,15 @@ class CloudStore {
     this._try("ledger delete", () => this.sb.from("ledgers").delete().eq("id", id)); // cascades members + expenses
   }
 
-  // Leave a group/trip: soft-remove myself (keeps my name for others' old expenses).
+  // Leave a group/trip (works for owners too — ownership hands off server-side).
   async leaveLedger(ledgerId) {
     const l = this.ledgerById(ledgerId);
     if (!l) return { ok: false, error: "Not found." };
-    if (l.iAmOwner) return { ok: false, error: "You created this — delete it in Settings instead." };
-    const myRef = this._myRef(ledgerId);
     this.state.ledgers = this.state.ledgers.filter((x) => x.id !== ledgerId); // drop from my view
     this.state.expenses = this.state.expenses.filter((e) => e.ledgerId !== ledgerId);
     this._notify();
-    const { error } = await this.sb.from("ledger_members")
-      .update({ has_left: true }).eq("ledger_id", ledgerId).eq("member_ref", myRef);
-    if (error) { console.error("[cloud] leave failed:", error.message); return { ok: false, error: error.message }; }
+    const { data, error } = await this.sb.rpc("leave_ledger", { p_ledger: ledgerId });
+    if (error || !(data && data.ok)) { await this.hydrate(); return { ok: false, error: (data && data.error) || error?.message || "Couldn't leave." }; }
     return { ok: true };
   }
 
