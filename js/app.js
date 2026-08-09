@@ -258,14 +258,18 @@ function renderFriends() {
     list.innerHTML = rows.map(({ m, net }) => {
       const pending = CLOUD && !m.userId && m.email;
       const nShared = sharedLedgers(m.id).length;
-      return `<div class="exp-row" data-friend="${m.id}" style="cursor:pointer">
-        ${avatarEl(m)}
-        <div class="exp-main"><div class="exp-desc">${esc(m.name)}${m.username ? ` <span class="exp-meta">@${esc(m.username)}</span>` : ""}${pending ? ' <span class="tag" style="color:var(--amber)">pending</span>' : ""}</div>
-          <div class="exp-meta">${nShared} shared ${nShared === 1 ? "ledger" : "ledgers"}</div></div>
+      return `<div class="exp-row">
+        <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;cursor:pointer" data-friend="${m.id}">
+          ${avatarEl(m)}
+          <div class="exp-main"><div class="exp-desc">${esc(m.name)}${m.username ? ` <span class="exp-meta">@${esc(m.username)}</span>` : ""}${pending ? ' <span class="tag" style="color:var(--amber)">pending</span>' : ""}</div>
+            <div class="exp-meta">${nShared} shared ${nShared === 1 ? "ledger" : "ledgers"}</div></div>
+        </div>
         <div class="exp-amt"><div>${netToStr(net)}</div></div>
+        ${CLOUD && m.userId ? `<button class="icon-btn" data-dm="${m.userId}" title="Message">💬</button>` : ""}
       </div>`;
     }).join("");
     list.querySelectorAll("[data-friend]").forEach((b) => b.onclick = () => { view = { type: "friend", friendId: b.dataset.friend }; render(); });
+    list.querySelectorAll("[data-dm]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); openDm(b.dataset.dm); });
   }
   main.querySelectorAll("[data-new]").forEach((b) => b.onclick = () => openLedgerModal(b.dataset.new));
   wireMobile();
@@ -316,6 +320,175 @@ function renderInvitations() {
   refreshInbox(); // pull anything new the moment the inbox is opened
 }
 
+// ---------- messaging ----------
+function chatAvatar(c) {
+  const m = (c.members || [])[0];
+  const label = c.isGroup ? "👥" : esc(initials(m ? m.name : "?"));
+  const bg = c.isGroup ? "#2f6fd6" : avColor(m);
+  return `<div class="avatar" style="background:${bg}">${label}</div>`;
+}
+function renderMessages() {
+  const main = $("#main");
+  const chats = store.state.chats || [];
+  main.innerHTML = `${mobileBar()}
+    <div class="page-head"><div><h1 class="page-title">💬 Messages</h1><p class="page-sub">Chat with friends and the people in your groups.</p></div>
+      <button class="btn" id="newChatBtn">＋ New chat</button></div>
+    <div style="margin-top:16px" id="chatList"></div>`;
+  wireMobile();
+  $("#newChatBtn").onclick = () => openNewChatModal();
+  const list = $("#chatList");
+  if (!chats.length) { list.innerHTML = emptyState("💬", "No chats yet", "Start a chat with a friend or a group. You can also tap the 💬 next to anyone in Friends or a group's Members."); }
+  else list.innerHTML = chats.map((c) => `
+    <div class="exp-row" data-chat="${c.id}" style="cursor:pointer">
+      ${chatAvatar(c)}
+      <div class="exp-main"><div class="exp-desc">${esc(store.chatTitle(c))}${c.isGroup ? ` <span class="exp-meta">· ${(c.members || []).length + 1} people</span>` : ""}</div>
+        <div class="exp-meta" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60vw">${c.lastBody ? esc(c.lastBody) : "No messages yet"}</div></div>
+      ${c.unread ? `<span class="nav-dot" style="margin-left:0">${c.unread}</span>` : ""}
+    </div>`).join("");
+  list.querySelectorAll("[data-chat]").forEach((el) => el.onclick = () => { view = { type: "chat", chatId: el.dataset.chat }; render(); });
+  if (store.loadChats) store.loadChats().then(() => { if (view.type === "messages") renderMessages(); });
+}
+
+async function renderChat(chatId) {
+  const main = $("#main");
+  const c = store.chatMeta(chatId);
+  const title = c ? store.chatTitle(c) : "Chat";
+  main.innerHTML = `${mobileBar()}
+    <div class="page-head">
+      <div style="max-width:100%"><button class="link-btn" id="backMsgs" style="padding-left:0">← Messages</button>
+        <h1 class="page-title" style="font-size:20px">${c && c.isGroup ? "👥 " : ""}${esc(title)}</h1>
+        ${c && c.isGroup ? `<p class="page-sub">${(c.members || []).map((m) => esc(m.name)).join(", ")}${c.members && c.members.length ? " · you" : ""}</p>` : ""}</div>
+      <div style="display:flex;gap:8px">${c && c.isGroup ? `<button class="btn ghost sm" id="chatManage">Manage</button>` : ""}<button class="icon-btn" id="chatDelete" title="Delete conversation (only for you)">🗑️</button></div>
+    </div>
+    <div id="msgScroll" style="max-height:calc(100vh - 280px);overflow-y:auto;padding:4px 0"><div class="exp-meta" style="padding:10px 14px">Loading…</div></div>
+    <div class="row" style="margin-top:12px;position:sticky;bottom:0"><input id="msgInput" placeholder="Message…" autocomplete="off" style="flex:1"><button class="btn" id="msgSend" style="flex:none">Send</button></div>`;
+  wireMobile();
+  $("#backMsgs").onclick = () => { view = { type: "messages" }; render(); };
+  if ($("#chatManage")) $("#chatManage").onclick = () => openManageChatModal(chatId);
+  $("#chatDelete").onclick = () => confirmDelete("Delete this conversation for you? Others keep theirs, and it comes back if someone messages the chat again.", async () => {
+    await store.clearChat(chatId); view = { type: "messages" }; render(); toast("Deleted for you.");
+  }, { confirmLabel: "Delete for me" });
+
+  let current = [];
+  const reload = async () => { current = await store.chatMessages(chatId); if (view.type === "chat" && view.chatId === chatId) paint(current); };
+  const paint = (msgs) => {
+    const box = $("#msgScroll"); if (!box) return;
+    if (!msgs.length) { box.innerHTML = `<div class="exp-meta" style="padding:10px 14px">No messages yet — say hi 👋</div>`; return; }
+    box.innerHTML = msgs.map((m) => {
+      const s = store.chatSender(chatId, m.sender);
+      const time = new Date(m.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      const who = m.mine || !c || !c.isGroup ? "" : `<div class="msg-who">${esc(s.name)}</div>`;
+      const inner = m.deleted
+        ? `<div style="opacity:.6;font-style:italic">message deleted</div>`
+        : `<div>${esc(m.body)}</div><div class="msg-time">${time}${m.editedAt ? " · edited" : ""}</div>`;
+      const tap = (m.mine && !m.deleted) ? ` data-msg="${m.id}" style="cursor:pointer"` : "";
+      return `<div class="msg-row ${m.mine ? "mine" : ""}">
+        ${m.mine ? "" : `<div class="avatar sm" style="background:${avColor(s)}">${esc(initials(s.name))}</div>`}
+        <div class="msg-bubble ${m.mine ? "mine" : ""}"${tap}>${who}${inner}</div>
+      </div>`;
+    }).join("");
+    box.querySelectorAll("[data-msg]").forEach((el) => el.onclick = () => {
+      const msg = current.find((x) => String(x.id) === el.dataset.msg); if (msg) openMessageActions(msg, reload);
+    });
+    box.scrollTop = box.scrollHeight;
+  };
+  current = await store.chatMessages(chatId);
+  if (view.type !== "chat" || view.chatId !== chatId) return; // navigated away
+  paint(current);
+  store.markChatRead(chatId).then(() => updateInboxBadge());
+
+  const send = async () => {
+    const inp = $("#msgInput"); const text = inp.value.trim(); if (!text) return;
+    inp.value = ""; inp.focus();
+    const r = await store.sendMessage(chatId, text);
+    if (!r.ok) { toast(r.error || "Couldn't send."); return; }
+    await reload();
+    store.loadChats();
+  };
+  $("#msgSend").onclick = send;
+  $("#msgInput").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
+  setTimeout(() => { const i = $("#msgInput"); if (i) i.focus(); }, 40);
+}
+
+function openNewChatModal() {
+  const friends = store.friends();
+  const chosen = new Set();
+  modal("New chat", `
+    <label style="margin-top:0">Chat name (optional — for groups)</label>
+    <input id="ncName" placeholder="e.g. Tokyo crew">
+    <label>People</label>
+    <div class="hint" style="margin-top:0">Pick friends. For a 1-on-1 it opens your existing thread if you have one.</div>
+    <div class="chips" id="ncFriends" style="margin-top:8px">${friends.length ? friends.map((f) => `<span class="chip" data-u="${f.id}">${esc(f.name)}</span>`).join("") : `<span class="exp-meta">No friends yet — add some first.</span>`}</div>
+    ${store.ledgers().filter((l) => l.kind !== "individual").length ? `<label>Or add everyone from a group/trip</label>
+      <select id="ncLedger"><option value="">— none —</option>${store.ledgers().filter((l) => l.kind !== "individual").map((l) => `<option value="${l.id}">${esc(ledgerDisplayName(l))}</option>`).join("")}</select>` : ""}
+    <div id="ncMsg" style="margin-top:10px"></div>
+  `, `<button class="btn ghost" data-close>Cancel</button><button class="btn" id="ncCreate">Start chat</button>`);
+  $("#modalHost").querySelectorAll("[data-u]").forEach((ch) => ch.onclick = () => { ch.classList.toggle("on"); chosen.has(ch.dataset.u) ? chosen.delete(ch.dataset.u) : chosen.add(ch.dataset.u); });
+  $("#ncCreate").onclick = async () => {
+    const ids = [...chosen];
+    const ledgerId = $("#ncLedger") ? $("#ncLedger").value : "";
+    const name = $("#ncName").value.trim();
+    if (!ids.length && !ledgerId) return toast("Pick at least one person or a group.");
+    const btn = $("#ncCreate"); btn.disabled = true;
+
+    // 1:1 with exactly one friend and no group → reuse existing thread
+    if (ids.length === 1 && !ledgerId) {
+      const r = await store.startDm(ids[0]);
+      if (r.ok) { closeModal(); view = { type: "chat", chatId: r.chatId }; render(); }
+      else { btn.disabled = false; toast(r.error || "Couldn't start chat."); }
+      return;
+    }
+    // group: if an identical thread exists, offer to reuse
+    if (ids.length && !ledgerId) {
+      const existing = await store.findGroupChat(ids);
+      if (existing) {
+        btn.disabled = false;
+        return confirmChoice("A chat with exactly these people already exists.", "Open it", "Start a new one", async (openExisting) => {
+          if (openExisting) { closeModal(); view = { type: "chat", chatId: existing }; render(); }
+          else { const r = await store.startGroupChat(name, ids); if (r.ok) { closeModal(); view = { type: "chat", chatId: r.chatId }; render(); } else toast(r.error || "Failed."); }
+        });
+      }
+    }
+    const r = await store.startGroupChat(name, ids);
+    if (!r.ok) { btn.disabled = false; return toast(r.error || "Couldn't start chat."); }
+    if (ledgerId) await store.addLedgerToChat(r.chatId, ledgerId);
+    closeModal(); view = { type: "chat", chatId: r.chatId }; render();
+  };
+}
+
+function openMessageActions(msg, reload) {
+  modal("Your message", `
+    <textarea id="emBody" rows="3">${esc(msg.body)}</textarea>
+    <div class="hint" style="margin-top:6px">Edit your message, or delete it for everyone in the chat.</div>
+  `, `<button class="btn danger" id="emDel" style="margin-right:auto">Delete</button><button class="btn ghost" data-close>Cancel</button><button class="btn" id="emSave">Save edit</button>`);
+  $("#emSave").onclick = async () => {
+    const v = $("#emBody").value.trim();
+    if (!v) return toast("Message can't be empty — use Delete instead.");
+    const r = await store.editMessage(msg.id, v); closeModal();
+    if (r.ok) { reload(); toast("Edited."); } else toast(r.error || "Couldn't edit.");
+  };
+  $("#emDel").onclick = () => { closeModal(); confirmDelete("Delete this message for everyone in the chat?", async () => {
+    const r = await store.deleteMessage(msg.id); if (r.ok) { reload(); toast("Deleted."); } else toast(r.error || "Couldn't delete.");
+  }, { confirmLabel: "Delete" }); };
+}
+
+function openManageChatModal(chatId) {
+  const c = store.chatMeta(chatId); if (!c) return;
+  modal("Manage chat", `
+    <label style="margin-top:0">Chat name</label>
+    <div class="row"><input id="mcName" value="${esc(c.name || "")}" placeholder="Unnamed chat"><button class="btn ghost" id="mcRename" style="flex:none">Save</button></div>
+    <label>Add a friend</label>
+    <div class="chips" id="mcFriends">${store.friends().filter((f) => !(c.members || []).some((m) => m.id === f.id)).map((f) => `<span class="chip" data-add="${f.id}">＋ ${esc(f.name)}</span>`).join("") || `<span class="exp-meta">Everyone's already here.</span>`}</div>
+    <label>Add everyone from a group/trip</label>
+    <select id="mcLedger"><option value="">— pick —</option>${store.ledgers().filter((l) => l.kind !== "individual").map((l) => `<option value="${l.id}">${esc(ledgerDisplayName(l))}</option>`).join("")}</select>
+    <div style="margin-top:10px"><button class="btn ghost sm" id="mcAddLedger">Add group's people</button></div>
+    <div id="mcMsg" style="margin-top:10px"></div>
+  `, `<button class="btn" data-close>Done</button>`);
+  $("#mcRename").onclick = async () => { await store.renameChat(chatId, $("#mcName").value.trim()); toast("Renamed."); };
+  $("#modalHost").querySelectorAll("[data-add]").forEach((b) => b.onclick = async () => { const r = await store.addUserToChat(chatId, b.dataset.add); if (r.ok) { toast("Added."); closeModal(); render(); } else toast(r.error || "Failed."); });
+  $("#mcAddLedger").onclick = async () => { const lid = $("#mcLedger").value; if (!lid) return toast("Pick a group first."); const r = await store.addLedgerToChat(chatId, lid); if (r.ok) { toast("Added the group's people."); closeModal(); render(); } else toast(r.error || "Failed."); };
+}
+
 function renderFriendDetail(friendId) {
   const m = store.memberById(friendId);
   if (!m) { view = { type: "friends" }; return render(); }
@@ -332,7 +505,7 @@ function renderFriendDetail(friendId) {
         <h1 class="page-title">${kindIcon.individual} ${esc(m.name)}</h1>
         <p class="page-sub">${m.username ? "@" + esc(m.username) + " · " : ""}${m.email ? esc(m.email) : "no email"}${CLOUD && !m.userId && m.email ? " · <span style='color:var(--amber)'>invited, pending</span>" : ""}</p>
       </div>
-      <button class="btn" id="addFriendExp">＋ Add expense</button>
+      <div style="display:flex;gap:8px">${CLOUD && m.userId ? `<button class="btn ghost" id="dmFriend">💬 Message</button>` : ""}<button class="btn" id="addFriendExp">＋ Add expense</button></div>
     </div>
     <div class="card stat"><div class="label">Your balance with ${esc(m.name)}</div><div class="value">${netToStr(net)}</div></div>
     ${owesYouTotal ? `<div style="margin-top:12px"><button class="btn ghost" id="remindFriend">✉️ Copy a reminder</button></div>` : ""}
@@ -340,6 +513,7 @@ function renderFriendDetail(friendId) {
     <div id="sharedList"></div>`;
 
   $("#backFriends").onclick = () => { view = { type: "friends" }; render(); };
+  if ($("#dmFriend")) $("#dmFriend").onclick = () => openDm(m.userId);
   $("#addFriendExp").onclick = async () => {
     // add an expense with just this person, in your 1:1 ledger (create if needed)
     let indiv = store.ledgers().find((l) => l.kind === "individual" && l.memberIds.includes(friendId));
@@ -652,10 +826,11 @@ function renderMembers(body, l) {
     const toggleBtn = canToggle ? `<button class="btn ghost sm" data-admin="${m.userId}" data-make="${own ? "0" : "1"}">${own ? "Remove admin" : "Make admin"}</button>` : "";
     // quick add-friend for a co-member who isn't your friend yet
     const friendBtn = (CLOUD && id !== "you" && m && m.userId && !store.isFriend(m.userId)) ? `<button class="btn ghost sm" data-friendadd="${m.userId}" data-fname="${esc(m.name)}" title="Send friend request">＋ Friend</button>` : "";
+    const dmBtn = (CLOUD && id !== "you" && m && m.userId) ? `<button class="icon-btn" data-dm="${m.userId}" title="Message">💬</button>` : "";
     return `<div class="bal-row">
       ${avatarEl(m, { cls: "clk", attrs: `data-profile="${id}"` })}
       <div class="grow" data-profile="${id}" style="cursor:pointer"><b>${esc(m?.name)}</b>${id === "you" ? " (you)" : ""}${adminBadge}${handle} ${meta}${pending ? ` <span class="tag" style="color:var(--amber)">invited · not signed up yet</span>` : ""}</div>
-      ${friendBtn}${toggleBtn}
+      ${dmBtn}${friendBtn}${toggleBtn}
       ${(id === "you" || !admin) ? "" : `<button class="icon-btn" data-remove="${id}" title="Remove from ${esc(ledgerDisplayName(l))}">✖</button>`}
     </div>`;
   }).join("");
@@ -721,6 +896,7 @@ function renderMembers(body, l) {
     const r = await store.sendFriendRequestUid(b.dataset.friendadd);
     if (r.ok) toast(`Friend request sent to ${b.dataset.fname || "them"}.`); else { b.disabled = false; toast(r.error || "Couldn't send."); }
   });
+  body.querySelectorAll("[data-dm]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); openDm(b.dataset.dm); });
   body.querySelectorAll("[data-cancelinv]").forEach((b) => b.onclick = () => {
     confirmDelete("Cancel this invitation?", async () => { await store.cancelInvite(l.id, b.dataset.cancelinv); render(); toast("Invitation cancelled."); }, { confirmLabel: "Cancel invite" });
   });
@@ -916,6 +1092,13 @@ function confirmDelete(message, onYes, opts = {}) {
     setTimeout(() => inp.focus(), 30);
   }
   $("#confirmYes").onclick = () => { closeModal(); onYes(); };
+}
+
+// Two-way choice modal → cb(true) for the primary, cb(false) for the secondary.
+function confirmChoice(message, yesLabel, noLabel, cb) {
+  modal("Heads up", `<p style="margin-top:0">${esc(message)}</p>`, `<button class="btn ghost" id="ccNo">${esc(noLabel)}</button><button class="btn" id="ccYes">${esc(yesLabel)}</button>`);
+  $("#ccYes").onclick = () => { closeModal(); cb(true); };
+  $("#ccNo").onclick = () => { closeModal(); cb(false); };
 }
 
 function openLedgerModal(kind) {
@@ -1354,6 +1537,8 @@ function render() {
   else if (view.type === "friend") renderFriendDetail(view.friendId);
   else if (view.type === "approvals") renderApprovals();
   else if (view.type === "invitations") renderInvitations();
+  else if (view.type === "messages") renderMessages();
+  else if (view.type === "chat") renderChat(view.chatId);
   else renderLedger();
   try { localStorage.setItem("uno.view", JSON.stringify(view)); } catch (e) {}
 }
@@ -1404,6 +1589,23 @@ function addInboxNav() {
   b.onclick = () => { view = { type: "invitations" }; setSidebar(false); render(); };
   nav.appendChild(b);
 }
+// Messages item in the sidebar with an unread red-dot count.
+function addMessagesNav() {
+  if (!CLOUD) return;
+  const nav = document.querySelector(".nav");
+  if (!nav || document.getElementById("msgNav")) return;
+  const b = document.createElement("button");
+  b.className = "nav-item"; b.id = "msgNav"; b.dataset.view = "messages";
+  b.innerHTML = `💬 <span>Messages</span> <span class="nav-dot" id="msgDot" hidden></span>`;
+  b.onclick = () => { view = { type: "messages" }; setSidebar(false); render(); };
+  nav.appendChild(b);
+}
+// Open (or reuse) a 1:1 chat with someone, then jump into it.
+async function openDm(userId) {
+  const r = await store.startDm(userId);
+  if (r.ok) { view = { type: "chat", chatId: r.chatId }; render(); }
+  else toast(r.error || "Couldn't open chat.");
+}
 function setDot(id, n) {
   const dot = document.getElementById(id);
   if (!dot) return;
@@ -1412,17 +1614,18 @@ function setDot(id, n) {
 function updateInboxBadge() {
   setDot("inboxDot", CLOUD && store.pendingCount ? store.pendingCount() : 0);
   setDot("apprDot", CLOUD && store.isPlatformAdmin && store.pendingApprovalCount ? store.pendingApprovalCount() : 0);
+  setDot("msgDot", CLOUD && store.messagesUnread ? store.messagesUnread() : 0);
 }
 // Refresh pending queues when the tab regains focus, so new items appear without a reload.
 let _inboxBusy = false;
 async function refreshInbox() {
   if (!CLOUD || !store.refreshInbox || _inboxBusy || document.hidden) return;
   _inboxBusy = true;
-  const before = (store.pendingCount ? store.pendingCount() : 0) + (store.pendingApprovalCount ? store.pendingApprovalCount() : 0);
+  const tally = () => (store.pendingCount ? store.pendingCount() : 0) + (store.pendingApprovalCount ? store.pendingApprovalCount() : 0) + (store.messagesUnread ? store.messagesUnread() : 0);
+  const before = tally();
   try { await store.refreshInbox(); } finally { _inboxBusy = false; }
   updateInboxBadge();
-  const after = (store.pendingCount ? store.pendingCount() : 0) + (store.pendingApprovalCount ? store.pendingApprovalCount() : 0);
-  if (after !== before && (view.type === "invitations" || view.type === "approvals")) render();
+  if (tally() !== before && ["invitations", "approvals", "messages", "chat"].includes(view.type)) render();
 }
 function wireInboxRefresh() {
   if (!CLOUD) return;
@@ -1453,6 +1656,7 @@ async function boot() {
     }
     if (!ok) return; // login screen is showing; don't render the app
     addSignOut();
+    addMessagesNav();
     addInboxNav();
     addAdminNav();
     wireInboxRefresh();

@@ -180,7 +180,7 @@ function translateExpenseData(data, from, to) {
 class CloudStore {
   constructor(client) {
     this.sb = client;
-    this.state = { version: 1, you: { id: "you", name: "You", email: "" }, people: [], ledgers: [], expenses: [], friends: [], friendRequests: [], invitations: [] };
+    this.state = { version: 1, you: { id: "you", name: "You", email: "" }, people: [], ledgers: [], expenses: [], friends: [], friendRequests: [], invitations: [], chats: [] };
     this.listeners = new Set();
     this.isPlatformAdmin = false; // one of the three platform admins?
     this.nameById = new Map();    // member_ref -> {name,...} for anyone (active/pending/left)
@@ -325,6 +325,7 @@ class CloudStore {
       const { data } = await this.sb.rpc("my_invitations");
       this.state.invitations = (data || []).map((i) => ({ ledgerId: i.ledger_id, kind: i.kind, name: i.name, inviter: i.inviter || "Someone" }));
     });
+    await this.loadChats();
 
     // platform admins: how many signups are waiting for approval (for the red badge)
     this.state.pendingApprovals = 0;
@@ -356,7 +357,102 @@ class CloudStore {
       const { data } = await this.sb.rpc("list_users_admin");
       this.state.pendingApprovals = (data || []).filter((u) => !u.approved).length;
     });
+    await this.loadChats();
     this._notify();
+  }
+
+  // ---- messaging ----
+  async loadChats() {
+    await this._try("chats", async () => {
+      const { data } = await this.sb.rpc("my_chats");
+      this.state.chats = (data || []).map((c) => ({
+        id: c.id, name: c.name || null, isGroup: !!c.is_group,
+        lastBody: c.last_body || "", lastAt: c.last_at ? new Date(c.last_at).getTime() : 0,
+        unread: c.unread || 0, clearedAt: c.cleared_at || null, members: c.members || [],
+      })).sort((a, b) => b.lastAt - a.lastAt);
+    });
+    this._notify();
+  }
+  messagesUnread() { return (this.state.chats || []).reduce((a, c) => a + (c.unread || 0), 0); }
+  chatMeta(chatId) { return (this.state.chats || []).find((c) => c.id === chatId) || null; }
+  // Title for a chat: its name, else the other members' names.
+  chatTitle(c) {
+    if (!c) return "Chat";
+    if (c.name) return c.name;
+    const names = (c.members || []).map((m) => m.name).filter(Boolean);
+    return names.length ? names.join(", ") : "Chat";
+  }
+  async startDm(userId) {
+    const { data, error } = await this.sb.rpc("start_dm", { p_other: userId });
+    if (error) return { ok: false, error: error.message };
+    await this.loadChats();
+    return { ok: true, chatId: data };
+  }
+  async findGroupChat(userIds) {
+    try { const { data } = await this.sb.rpc("find_group_chat", { p_users: userIds }); return data || null; }
+    catch { return null; }
+  }
+  async startGroupChat(name, userIds) {
+    const { data, error } = await this.sb.rpc("start_group_chat", { p_name: name || null, p_users: userIds });
+    if (error) return { ok: false, error: error.message };
+    await this.loadChats();
+    return { ok: true, chatId: data };
+  }
+  async addUserToChat(chatId, userId) {
+    const { data, error } = await this.sb.rpc("add_user_to_chat", { p_chat: chatId, p_user: userId });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
+    await this.loadChats(); return { ok: true };
+  }
+  async addLedgerToChat(chatId, ledgerId) {
+    const { data, error } = await this.sb.rpc("add_ledger_to_chat", { p_chat: chatId, p_ledger: ledgerId });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
+    await this.loadChats(); return { ok: true };
+  }
+  async renameChat(chatId, name) {
+    const c = this.chatMeta(chatId); if (c) c.name = name || null; this._notify();
+    await this._try("rename chat", () => this.sb.rpc("rename_chat", { p_chat: chatId, p_name: name || null }));
+    return { ok: true };
+  }
+  async chatMessages(chatId) {
+    const meta = this.chatMeta(chatId);
+    let q = this.sb.from("messages").select("*").eq("chat_id", chatId).order("created_at", { ascending: true });
+    if (meta && meta.clearedAt) q = q.gt("created_at", meta.clearedAt); // hide messages I cleared
+    const { data, error } = await q;
+    if (error) { console.error("[cloud] load messages failed:", error.message); return []; }
+    return (data || []).map((m) => ({ id: m.id, chatId: m.chat_id, sender: m.sender, mine: m.sender === myId, body: m.body || "", deleted: !!m.deleted, editedAt: m.edited_at || null, attachments: m.attachments || null, mentions: m.mentions || null, at: m.created_at ? new Date(m.created_at).getTime() : 0 }));
+  }
+  async sendMessage(chatId, body) {
+    const text = (body || "").trim(); if (!text) return { ok: false, error: "Empty message." };
+    const { data, error } = await this.sb.from("messages").insert({ chat_id: chatId, sender: myId, body: text }).select().single();
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, message: { id: data.id, sender: myId, mine: true, body: text, at: Date.now() } };
+  }
+  async editMessage(messageId, body) {
+    const text = (body || "").trim(); if (!text) return { ok: false, error: "Message can't be empty — delete it instead." };
+    const { error } = await this.sb.from("messages").update({ body: text, edited_at: new Date().toISOString() }).eq("id", messageId);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  }
+  async deleteMessage(messageId) {
+    const { error } = await this.sb.from("messages").update({ deleted: true, body: null }).eq("id", messageId);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  }
+  async clearChat(chatId) {
+    this.state.chats = (this.state.chats || []).filter((c) => c.id !== chatId); this._notify();
+    await this._try("clear chat", () => this.sb.rpc("clear_chat", { p_chat: chatId }));
+    return { ok: true };
+  }
+  async markChatRead(chatId) {
+    const c = this.chatMeta(chatId); if (c) c.unread = 0; this._notify();
+    await this._try("mark read", () => this.sb.rpc("mark_chat_read", { p_chat: chatId }));
+  }
+  // Resolve a sender uid to a display name/color within a chat.
+  chatSender(chatId, uid) {
+    if (uid === myId) return { name: this.state.you.name, color: this.state.you.color };
+    const c = this.chatMeta(chatId);
+    const m = c && (c.members || []).find((x) => x.id === uid);
+    return m ? { name: m.name, color: m.color } : { name: "Someone", color: null };
   }
 
   // ---- reads (mirror LocalStore) ----
