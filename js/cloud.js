@@ -424,11 +424,12 @@ class CloudStore {
     if (error) { console.error("[cloud] load messages failed:", error.message); return []; }
     return (data || []).map((m) => ({ id: m.id, chatId: m.chat_id, sender: m.sender, mine: m.sender === myId, body: m.body || "", deleted: !!m.deleted, editedAt: m.edited_at || null, attachments: m.attachments || null, mentions: m.mentions || null, at: m.created_at ? new Date(m.created_at).getTime() : 0 }));
   }
-  async sendMessage(chatId, body, attachments) {
+  async sendMessage(chatId, body, attachments, mentions) {
     const text = (body || "").trim();
     const atts = (attachments && attachments.length) ? attachments : null;
+    const mens = (mentions && mentions.length) ? mentions : null;
     if (!text && !atts) return { ok: false, error: "Empty message." };
-    const { error } = await this.sb.from("messages").insert({ chat_id: chatId, sender: myId, body: text || null, attachments: atts });
+    const { error } = await this.sb.from("messages").insert({ chat_id: chatId, sender: myId, body: text || null, attachments: atts, mentions: mens });
     if (error) return { ok: false, error: error.message };
     return { ok: true };
   }

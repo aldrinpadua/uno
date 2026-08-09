@@ -26,6 +26,17 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const initials = (name) => (name || "?").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 const fmtBytes = (n) => { n = Number(n) || 0; if (n < 1024) return n + " B"; if (n < 1048576) return (n / 1024).toFixed(0) + " KB"; return (n / 1048576).toFixed(1) + " MB"; };
+// Highlight @mentions in a message body. Longest labels first so overlapping names don't partial-match.
+function renderMsgBody(text, mentions) {
+  let html = esc(text);
+  const ms = (mentions || []).slice().sort((a, b) => (b.label || "").length - (a.label || "").length);
+  for (const mn of ms) {
+    if (!mn.label) continue;
+    const token = "@" + esc(mn.label);
+    html = html.split(token).join(`<span class="mention">@${esc(mn.label)}</span>`);
+  }
+  return html;
+}
 // profile-thumbnail colors people can pick from
 const AVATAR_COLORS = ["#2f6fd6", "#8A2432", "#D8A32B", "#2ecc71", "#7b5cff", "#e0559b", "#0ea5a5", "#e67e22", "#6B7280", "#111827"];
 const avColor = (m) => (m && m.color) || "#2f6fd6";
@@ -368,11 +379,14 @@ async function renderChat(chatId) {
       <div style="display:flex;gap:8px">${c && c.isGroup ? `<button class="btn ghost sm" id="chatManage">Manage</button>` : ""}<button class="icon-btn" id="chatDelete" title="Delete conversation (only for you)">🗑️</button></div>
     </div>
     <div id="msgScroll" style="max-height:calc(100vh - 280px);overflow-y:auto;padding:4px 0"><div class="exp-meta" style="padding:10px 14px">Loading…</div></div>
-    <div class="row" style="margin-top:12px;position:sticky;bottom:0;flex-wrap:nowrap">
-      <input type="file" id="msgFile" hidden>
-      <button class="btn ghost" id="msgAttach" style="flex:none" title="Attach a photo or file">📎</button>
-      <input id="msgInput" placeholder="Message…" autocomplete="off" style="flex:1;min-width:0">
-      <button class="btn" id="msgSend" style="flex:none">Send</button>
+    <div style="position:relative;margin-top:12px">
+      <div id="mentionMenu" class="mention-menu" hidden></div>
+      <div class="row" style="position:sticky;bottom:0;flex-wrap:nowrap">
+        <input type="file" id="msgFile" hidden>
+        <button class="btn ghost" id="msgAttach" style="flex:none" title="Attach a photo or file">📎</button>
+        <input id="msgInput" placeholder="Message… (type @ to mention)" autocomplete="off" style="flex:1;min-width:0">
+        <button class="btn" id="msgSend" style="flex:none">Send</button>
+      </div>
     </div>`;
   wireMobile();
   $("#backMsgs").onclick = () => { view = { type: "messages" }; render(); };
@@ -395,7 +409,7 @@ async function renderChat(chatId) {
         : `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="msg-file">📎 <span class="fn">${esc(a.name || "file")}</span>${a.size ? `<span class="fsz">${fmtBytes(a.size)}</span>` : ""}</a>`).join("");
       const inner = m.deleted
         ? `<div style="opacity:.6;font-style:italic">message deleted</div>`
-        : `${atts}${m.body ? `<div>${esc(m.body)}</div>` : ""}<div class="msg-time">${time}${m.editedAt ? " · edited" : ""}</div>`;
+        : `${atts}${m.body ? `<div>${renderMsgBody(m.body, m.mentions)}</div>` : ""}<div class="msg-time">${time}${m.editedAt ? " · edited" : ""}</div>`;
       const tap = (m.mine && !m.deleted) ? ` data-msg="${m.id}" style="cursor:pointer"` : "";
       return `<div class="msg-row ${m.mine ? "mine" : ""}">
         ${m.mine ? "" : `<div class="avatar sm" style="background:${avColor(s)}">${esc(initials(s.name))}</div>`}
@@ -417,16 +431,68 @@ async function renderChat(chatId) {
       reload().then(() => store.markChatRead(chatId).then(() => updateInboxBadge()));
   };
 
+  // ---------- @-mentions ----------
+  // Candidates: people in this chat + my groups/trips. Picked mentions are tracked
+  // and, on send, kept only if their "@Label" text still appears in the message.
+  let pendingMentions = [];
+  let menuIdx = 0;
+  const menu = $("#mentionMenu");
+  const mentionCands = () => {
+    const people = (c && c.members || []).map((m) => ({ type: "user", id: m.id, label: m.name }));
+    const groups = store.ledgers().filter((l) => l.kind !== "individual").map((l) => ({ type: "group", id: l.id, label: ledgerDisplayName(l) }));
+    return [...people, ...groups].filter((x) => x.label);
+  };
+  const hideMenu = () => { if (menu) { menu.hidden = true; menu.innerHTML = ""; menu._items = null; } };
+  const highlight = () => { if (!menu || menu.hidden) return; menu.querySelectorAll(".mention-item").forEach((el, i) => el.classList.toggle("on", i === menuIdx)); };
+  const pickMention = (cand) => {
+    if (!cand) return;
+    const inp = $("#msgInput"); const caret = inp.selectionStart ?? inp.value.length;
+    const pre = inp.value.slice(0, caret), post = inp.value.slice(caret);
+    const m = pre.match(/@([^\s@]*)$/); if (!m) { hideMenu(); return; }
+    const start = caret - m[0].length;
+    const insert = "@" + cand.label + " ";
+    inp.value = pre.slice(0, start) + insert + post;
+    const nc = start + insert.length; inp.setSelectionRange(nc, nc);
+    if (!pendingMentions.some((x) => x.type === cand.type && x.id === cand.id)) pendingMentions.push({ ...cand });
+    hideMenu(); inp.focus();
+  };
+  const onType = () => {
+    const inp = $("#msgInput"); if (!inp || !menu) return;
+    const caret = inp.selectionStart ?? inp.value.length;
+    const m = inp.value.slice(0, caret).match(/@([^\s@]*)$/);
+    if (!m) return hideMenu();
+    const q = m[1].toLowerCase();
+    const items = mentionCands().filter((x) => x.label.toLowerCase().includes(q)).slice(0, 6);
+    if (!items.length) return hideMenu();
+    menuIdx = 0; menu._items = items;
+    menu.innerHTML = items.map((x, i) => `<div class="mention-item${i === 0 ? " on" : ""}" data-i="${i}">${x.type === "group" ? "👥 " : ""}${esc(x.label)}</div>`).join("");
+    menu.hidden = false;
+    menu.querySelectorAll(".mention-item").forEach((el) => el.onmousedown = (e) => { e.preventDefault(); pickMention(items[+el.dataset.i]); });
+  };
+  const finalizeMentions = (text) => pendingMentions.filter((m) => text.includes("@" + m.label));
+
   const send = async () => {
     const inp = $("#msgInput"); const text = inp.value.trim(); if (!text) return;
-    inp.value = ""; inp.focus();
-    const r = await store.sendMessage(chatId, text);
+    const mentions = finalizeMentions(text);
+    inp.value = ""; pendingMentions = []; hideMenu(); inp.focus();
+    const r = await store.sendMessage(chatId, text, null, mentions);
     if (!r.ok) { toast(r.error || "Couldn't send."); return; }
     await reload();
     store.loadChats();
   };
   $("#msgSend").onclick = send;
-  $("#msgInput").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
+  $("#msgInput").addEventListener("input", onType);
+  $("#msgInput").onkeydown = (e) => {
+    if (menu && !menu.hidden) {
+      const items = menu._items || [];
+      if (e.key === "ArrowDown") { e.preventDefault(); menuIdx = (menuIdx + 1) % items.length; highlight(); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); menuIdx = (menuIdx - 1 + items.length) % items.length; highlight(); return; }
+      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickMention(items[menuIdx]); return; }
+      if (e.key === "Escape") { e.preventDefault(); hideMenu(); return; }
+    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+  $("#msgInput").onblur = () => setTimeout(hideMenu, 120);
   $("#msgAttach").onclick = () => $("#msgFile").click();
   $("#msgFile").onchange = async () => {
     const f = $("#msgFile").files[0]; if (!f) return;
@@ -435,8 +501,10 @@ async function renderChat(chatId) {
     const att = $("#msgAttach"); att.disabled = true; toast("Uploading…");
     const up = await store.uploadChatFile(f); att.disabled = false;
     if (!up.ok) return toast(up.error || "Upload failed.");
-    const text = $("#msgInput").value.trim(); $("#msgInput").value = "";
-    const r = await store.sendMessage(chatId, text, [up.attachment]);
+    const inp = $("#msgInput"); const text = inp.value.trim();
+    const mentions = finalizeMentions(text);
+    inp.value = ""; pendingMentions = []; hideMenu();
+    const r = await store.sendMessage(chatId, text, [up.attachment], mentions);
     if (!r.ok) return toast(r.error || "Couldn't send.");
     await reload(); store.loadChats();
   };
