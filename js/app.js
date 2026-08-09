@@ -400,6 +400,7 @@ async function renderApprovals() {
   const users = await store.listUsersAdmin();
   const pending = users.filter((u) => !u.approved);
   const approved = users.filter((u) => u.approved);
+  store.state.pendingApprovals = pending.length; updateInboxBadge(); // keep the red badge in sync
   const row = (u, actions) => `<div class="bal-row">
     ${avatarEl(u)}
     <div class="grow"><b>${esc(u.name)}</b>${u.username ? ` <span class="exp-meta">@${esc(u.username)}</span>` : ""} <span class="exp-meta">${esc(u.email)}</span></div>
@@ -1378,11 +1379,14 @@ function addInboxNav() {
   b.onclick = () => { view = { type: "invitations" }; setSidebar(false); render(); };
   nav.appendChild(b);
 }
-function updateInboxBadge() {
-  const dot = document.getElementById("inboxDot");
+function setDot(id, n) {
+  const dot = document.getElementById(id);
   if (!dot) return;
-  const n = CLOUD && store.pendingCount ? store.pendingCount() : 0;
   if (n > 0) { dot.textContent = n; dot.hidden = false; } else { dot.hidden = true; }
+}
+function updateInboxBadge() {
+  setDot("inboxDot", CLOUD && store.pendingCount ? store.pendingCount() : 0);
+  setDot("apprDot", CLOUD && store.isPlatformAdmin && store.pendingApprovalCount ? store.pendingApprovalCount() : 0);
 }
 
 // Platform admins get an "Approvals" item in the sidebar.
@@ -1392,7 +1396,7 @@ function addAdminNav() {
   if (!nav || document.getElementById("apprNav")) return;
   const b = document.createElement("button");
   b.className = "nav-item"; b.id = "apprNav"; b.dataset.view = "approvals";
-  b.innerHTML = `🛡️ <span>Approvals</span>`;
+  b.innerHTML = `🛡️ <span>Approvals</span> <span class="nav-dot" id="apprDot" hidden></span>`;
   b.onclick = () => { view = { type: "approvals" }; setSidebar(false); render(); };
   nav.appendChild(b);
 }

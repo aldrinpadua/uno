@@ -321,11 +321,21 @@ class CloudStore {
       this.state.invitations = (data || []).map((i) => ({ ledgerId: i.ledger_id, kind: i.kind, name: i.name, inviter: i.inviter || "Someone" }));
     });
 
+    // platform admins: how many signups are waiting for approval (for the red badge)
+    this.state.pendingApprovals = 0;
+    if (this.isPlatformAdmin) {
+      await this._try("pending approvals", async () => {
+        const { data } = await this.sb.rpc("list_users_admin");
+        this.state.pendingApprovals = (data || []).filter((u) => !u.approved).length;
+      });
+    }
+
     this._notify();
     if (this.state.you.username) this._propagateSelf(); // refresh my copies for others
   }
-  // Count for the sidebar red-dot: pending friend requests + group/trip invites.
+  // Counts for the sidebar red-dots.
   pendingCount() { return (this.state.friendRequests?.length || 0) + (this.state.invitations?.length || 0); }
+  pendingApprovalCount() { return this.state.pendingApprovals || 0; }
 
   // ---- reads (mirror LocalStore) ----
   allMembers() { return [this.state.you, ...this.state.people, ...(this.state.friends || [])]; }
