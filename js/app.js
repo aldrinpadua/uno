@@ -1747,7 +1747,9 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
+const BUILD = "2026-08-09b · messaging: attachments + @mentions + email";
 async function boot() {
+  console.log("%cUNO Ledger build:", "color:#D8A32B;font-weight:bold", BUILD);
   if (CONFIG.MODE === "cloud") {
     let ok = false;
     try { ok = await startCloud(); }
