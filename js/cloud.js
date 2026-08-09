@@ -336,6 +336,23 @@ class CloudStore {
   // Counts for the sidebar red-dots.
   pendingCount() { return (this.state.friendRequests?.length || 0) + (this.state.invitations?.length || 0); }
   pendingApprovalCount() { return this.state.pendingApprovals || 0; }
+  // Re-pull just the pending queues (friend requests, invites, approvals) without a
+  // full hydrate — used to refresh badges when the tab regains focus / inbox opens.
+  async refreshInbox() {
+    await this._try("refresh friend requests", async () => {
+      const { data } = await this.sb.rpc("my_friend_requests");
+      this.state.friendRequests = (data || []).map((r) => ({ id: r.friendship_id, requester: r.requester, name: r.name || (r.email || "").split("@")[0], username: r.username || null, email: r.email || "" }));
+    });
+    await this._try("refresh invitations", async () => {
+      const { data } = await this.sb.rpc("my_invitations");
+      this.state.invitations = (data || []).map((i) => ({ ledgerId: i.ledger_id, kind: i.kind, name: i.name, inviter: i.inviter || "Someone" }));
+    });
+    if (this.isPlatformAdmin) await this._try("refresh approvals", async () => {
+      const { data } = await this.sb.rpc("list_users_admin");
+      this.state.pendingApprovals = (data || []).filter((u) => !u.approved).length;
+    });
+    this._notify();
+  }
 
   // ---- reads (mirror LocalStore) ----
   allMembers() { return [this.state.you, ...this.state.people, ...(this.state.friends || [])]; }

@@ -313,6 +313,7 @@ function renderInvitations() {
   main.querySelectorAll("[data-fdec]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.declineFriendRequest(+b.dataset.fdec); if (r.ok) { toast("Declined."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
   main.querySelectorAll("[data-iacc]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.acceptInvitation(b.dataset.iacc); if (r.ok) { toast("Joined."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
   main.querySelectorAll("[data-idec]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.declineInvitation(b.dataset.idec); if (r.ok) { toast("Declined."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
+  refreshInbox(); // pull anything new the moment the inbox is opened
 }
 
 function renderFriendDetail(friendId) {
@@ -1388,6 +1389,22 @@ function updateInboxBadge() {
   setDot("inboxDot", CLOUD && store.pendingCount ? store.pendingCount() : 0);
   setDot("apprDot", CLOUD && store.isPlatformAdmin && store.pendingApprovalCount ? store.pendingApprovalCount() : 0);
 }
+// Refresh pending queues when the tab regains focus, so new items appear without a reload.
+let _inboxBusy = false;
+async function refreshInbox() {
+  if (!CLOUD || !store.refreshInbox || _inboxBusy || document.hidden) return;
+  _inboxBusy = true;
+  const before = (store.pendingCount ? store.pendingCount() : 0) + (store.pendingApprovalCount ? store.pendingApprovalCount() : 0);
+  try { await store.refreshInbox(); } finally { _inboxBusy = false; }
+  updateInboxBadge();
+  const after = (store.pendingCount ? store.pendingCount() : 0) + (store.pendingApprovalCount ? store.pendingApprovalCount() : 0);
+  if (after !== before && (view.type === "invitations" || view.type === "approvals")) render();
+}
+function wireInboxRefresh() {
+  if (!CLOUD) return;
+  document.addEventListener("visibilitychange", refreshInbox);
+  window.addEventListener("focus", refreshInbox);
+}
 
 // Platform admins get an "Approvals" item in the sidebar.
 function addAdminNav() {
@@ -1414,6 +1431,7 @@ async function boot() {
     addSignOut();
     addInboxNav();
     addAdminNav();
+    wireInboxRefresh();
     restoreView();
     render();
     if (!store.state.you.username) openUsernameModal(true); // required on first sign-in
