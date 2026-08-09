@@ -155,6 +155,11 @@ input[type="date"]::-webkit-datetime-edit { padding: 0; line-height: normal; }
 .msg-file:hover { background: rgba(255,255,255,.12); }
 .msg-file .fn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
 .msg-file .fsz { opacity: .6; font-size: 11px; flex: none; }
+.mention { background: rgba(79,157,255,.18); color: var(--brand); border-radius: 5px; padding: 0 3px; font-weight: 600; }
+.msg-bubble.mine .mention { background: rgba(255,255,255,.24); color: #fff; }
+.mention-menu { position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); z-index: 40; max-height: 220px; overflow-y: auto; }
+.mention-item { padding: 10px 13px; cursor: pointer; font-size: 14px; }
+.mention-item.on, .mention-item:hover { background: var(--brand-2); color: #fff; }
 .hint { color: var(--muted); font-size: 12px; margin-top: 5px; }
 .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 6px; }
 .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 6px 12px; cursor: pointer; font-size: 13px; user-select: none; }
