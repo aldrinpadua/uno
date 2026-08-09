@@ -136,6 +136,12 @@ input[type="date"]::-webkit-date-and-time-value { text-align: left; margin: 0; p
 input[type="date"]::-webkit-datetime-edit { padding: 0; line-height: normal; }
 .row { display: flex; gap: 10px; }
 .row > * { flex: 1; }
+/* red notification dot/count for the Invitations nav item */
+.nav-dot { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: auto; border-radius: 9px; background: var(--red); color: #fff; font-size: 11px; font-weight: 700; }
+.nav-item { display: flex; align-items: center; gap: 6px; }
+.avatar.clk { cursor: pointer; }
+.av-swatch { width: 26px; height: 26px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; box-sizing: border-box; }
+.av-swatch.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--bg); }
 .hint { color: var(--muted); font-size: 12px; margin-top: 5px; }
 .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 6px; }
 .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 6px 12px; cursor: pointer; font-size: 13px; user-select: none; }
