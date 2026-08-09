@@ -19,6 +19,10 @@ let view = { type: "dashboard", ledgerId: null, tab: "expenses" };
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const initials = (name) => (name || "?").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+// profile-thumbnail colors people can pick from
+const AVATAR_COLORS = ["#2f6fd6", "#8A2432", "#D8A32B", "#2ecc71", "#7b5cff", "#e0559b", "#0ea5a5", "#e67e22", "#6B7280", "#111827"];
+const avColor = (m) => (m && m.color) || "#2f6fd6";
+const avatarEl = (m, { cls = "", attrs = "" } = {}) => `<div class="avatar ${cls}" style="background:${avColor(m)}"${attrs ? " " + attrs : ""}>${esc(initials(m?.name))}</div>`;
 const kindLabel = { group: "Group", trip: "Trip", individual: "Friend" };
 const kindIcon = { group: "👨‍👩‍👧", trip: "🧳", individual: "🧍" };
 
@@ -137,7 +141,7 @@ function renderSidebar() {
     : "no activity yet";
   $("#youCard").innerHTML = `
     <div style="display:flex;align-items:center;gap:9px">
-      <div class="avatar">${esc(initials(you.name))}</div>
+      ${avatarEl(you)}
       <div><div style="font-weight:600">${esc(you.name)}${CLOUD && you.username ? ` <span class="exp-meta">@${esc(you.username)}</span>` : (you.email ? "" : ' <span class="tag">add email</span>')}</div>
       <div class="you-net">${netStr}</div></div>
     </div>`;
@@ -149,6 +153,7 @@ function renderSidebar() {
   fillList("#tripList", trips);
 
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view.type || (view.type === "friend" && b.dataset.view === "friends")));
+  updateInboxBadge();
 }
 
 function fillList(sel, ledgers) {
@@ -222,34 +227,39 @@ const netToStr = (net, verbYou = "you owe ", verbThem = "owes you ") =>
 
 function renderFriends() {
   const main = $("#main");
-  const people = store.state.people.slice();
+  const people = (CLOUD ? store.friends() : store.state.people).slice();
   const rows = people.map((m) => ({ m, net: friendNet(m.id) })).sort((a, b) => sumAbs(b.net) - sumAbs(a.net));
   const owed = {}, owe = {};
   rows.forEach((r) => Object.entries(r.net).forEach(([c, v]) => { if (v > 0) owed[c] = (owed[c] || 0) + v; else if (v < 0) owe[c] = (owe[c] || 0) + v; }));
   const fmtSum = (o) => Object.keys(o).length ? Object.entries(o).map(([c, v]) => formatMoney(Math.abs(v), c)).join(" · ") : formatMoney(0);
+  const reqCount = CLOUD ? (store.state.friendRequests || []).length : 0;
 
   main.innerHTML = `
     ${mobileBar()}
     <div class="page-head">
-      <div><h1 class="page-title">🧑‍🤝‍🧑 Friends</h1><p class="page-sub">Everyone you split with, and where you stand.</p></div>
-      ${CLOUD ? '<button class="btn" data-new="individual">＋ Add friend</button>' : ""}
+      <div><h1 class="page-title">🧑‍🤝‍🧑 Friends</h1><p class="page-sub">People you've added and accepted.</p></div>
+      ${CLOUD ? '<div style="display:flex;gap:8px"><button class="btn ghost" id="myLinkBtn">🔗 My link</button><button class="btn" id="addFriendBtn">＋ Add friend</button></div>' : '<button class="btn" data-new="individual">＋ Add friend</button>'}
     </div>
+    ${reqCount ? `<div class="card" style="margin-top:14px;display:flex;align-items:center;justify-content:space-between"><div><b>${reqCount}</b> friend request${reqCount === 1 ? "" : "s"} waiting</div><button class="btn sm" id="goInbox">Review</button></div>` : ""}
     <div class="grid cards-3" style="margin-top:14px">
       <div class="card stat"><div class="label">You are owed</div><div class="value pos">${fmtSum(owed)}</div></div>
       <div class="card stat"><div class="label">You owe</div><div class="value neg">${fmtSum(owe)}</div></div>
       <div class="card stat"><div class="label">Friends</div><div class="value">${people.length}</div></div>
     </div>
     <div style="margin-top:20px" id="friendList"></div>`;
+  if ($("#addFriendBtn")) $("#addFriendBtn").onclick = () => openAddFriendModal();
+  if ($("#myLinkBtn")) $("#myLinkBtn").onclick = () => copyLink(store.friendLink(), "Your friend invite link");
+  if ($("#goInbox")) $("#goInbox").onclick = () => { view = { type: "invitations" }; render(); };
 
   const list = $("#friendList");
   if (!people.length) {
-    list.innerHTML = emptyState("🧑‍🤝‍🧑", "No friends yet", CLOUD ? "Add a friend by email or @username, or add people to a group." : "Add people to your groups and trips and they'll show up here.");
+    list.innerHTML = emptyState("🧑‍🤝‍🧑", "No friends yet", CLOUD ? "Add a friend by @username or email — they'll get a request to accept. Or share your link." : "Add people to your groups and trips and they'll show up here.");
   } else {
     list.innerHTML = rows.map(({ m, net }) => {
       const pending = CLOUD && !m.userId && m.email;
       const nShared = sharedLedgers(m.id).length;
       return `<div class="exp-row" data-friend="${m.id}" style="cursor:pointer">
-        <div class="avatar">${esc(initials(m.name))}</div>
+        ${avatarEl(m)}
         <div class="exp-main"><div class="exp-desc">${esc(m.name)}${m.username ? ` <span class="exp-meta">@${esc(m.username)}</span>` : ""}${pending ? ' <span class="tag" style="color:var(--amber)">pending</span>' : ""}</div>
           <div class="exp-meta">${nShared} shared ${nShared === 1 ? "ledger" : "ledgers"}</div></div>
         <div class="exp-amt"><div>${netToStr(net)}</div></div>
@@ -259,6 +269,50 @@ function renderFriends() {
   }
   main.querySelectorAll("[data-new]").forEach((b) => b.onclick = () => openLedgerModal(b.dataset.new));
   wireMobile();
+}
+
+async function copyLink(link, label) {
+  if (!link) return toast("Link isn't ready yet — try again in a moment.");
+  try { await navigator.clipboard.writeText(link); toast(`${label || "Link"} copied — paste it in a chat.`); }
+  catch { modal("Invite link", `<p class="hint" style="margin-top:0">Copy this and send it to whoever you want to invite:</p><div class="mail-preview">${esc(link)}</div>`, `<button class="btn" data-close>Close</button>`); }
+}
+
+function openAddFriendModal() {
+  modal("Add a friend", `
+    <label style="margin-top:0">Their @username or email</label>
+    <input id="afInput" autocapitalize="off" spellcheck="false" placeholder="@username or name@example.com">
+    <div class="hint" style="margin-top:6px">They'll get a request to accept. A new email gets an invite to join.</div>
+    <hr style="border-color:var(--line);margin:16px 0">
+    <label style="margin-top:0">Or share your invite link</label>
+    <div class="row"><input value="${esc(store.friendLink())}" readonly><button class="btn ghost" id="afCopy" style="flex:none">Copy</button></div>
+    <div id="afMsg" style="margin-top:10px"></div>
+  `, `<button class="btn ghost" data-close>Cancel</button><button class="btn" id="afSend">Send request</button>`);
+  $("#afCopy").onclick = () => copyLink(store.friendLink(), "Your friend invite link");
+  $("#afSend").onclick = async () => {
+    const v = $("#afInput").value.trim(); if (!v) return toast("Enter a @username or email.");
+    const btn = $("#afSend"); btn.disabled = true; $("#afMsg").innerHTML = `<span class="hint">Sending…</span>`;
+    const r = await store.sendFriendRequest(v); btn.disabled = false;
+    if (r.ok) { closeModal(); toast(r.status === "invited" ? "Invite sent by email." : "Friend request sent."); render(); }
+    else $("#afMsg").innerHTML = `<span class="neg">${esc(r.error)}</span>`;
+  };
+}
+
+// ---------- invitations inbox (friend requests + group/trip invites) ----------
+function renderInvitations() {
+  const main = $("#main");
+  const reqs = store.state.friendRequests || [];
+  const invs = store.state.invitations || [];
+  main.innerHTML = `${mobileBar()}
+    <div class="page-head"><div><h1 class="page-title">✉️ Invitations</h1><p class="page-sub">Friend requests and group/trip invites waiting on you.</p></div></div>
+    <h3 style="margin:18px 0 8px">Friend requests ${reqs.length ? `<span class="tag" style="color:var(--amber)">${reqs.length}</span>` : ""}</h3>
+    <div class="card" style="padding:6px 0">${reqs.length ? reqs.map((r) => `<div class="bal-row">${avatarEl(r)}<div class="grow"><b>${esc(r.name)}</b>${r.username ? ` <span class="exp-meta">@${esc(r.username)}</span>` : ""} <span class="exp-meta">wants to be friends</span></div><button class="btn sm" data-facc="${r.id}">Accept</button> <button class="btn ghost sm" data-fdec="${r.id}">Decline</button></div>`).join("") : `<div class="exp-meta" style="padding:10px 14px">No friend requests.</div>`}</div>
+    <h3 style="margin:22px 0 8px">Group &amp; trip invites ${invs.length ? `<span class="tag" style="color:var(--amber)">${invs.length}</span>` : ""}</h3>
+    <div class="card" style="padding:6px 0">${invs.length ? invs.map((i) => `<div class="bal-row"><div class="exp-cat">${kindIcon[i.kind] || "👥"}</div><div class="grow"><b>${esc(i.name)}</b> <span class="exp-meta">${kindLabel[i.kind] || "Group"} · invited by ${esc(i.inviter)}</span></div><button class="btn sm" data-iacc="${i.ledgerId}">Accept</button> <button class="btn ghost sm" data-idec="${i.ledgerId}">Decline</button></div>`).join("") : `<div class="exp-meta" style="padding:10px 14px">No pending invites.</div>`}</div>`;
+  wireMobile();
+  main.querySelectorAll("[data-facc]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.acceptFriendRequest(+b.dataset.facc); if (r.ok) { toast("You're now friends."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
+  main.querySelectorAll("[data-fdec]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.declineFriendRequest(+b.dataset.fdec); if (r.ok) { toast("Declined."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
+  main.querySelectorAll("[data-iacc]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.acceptInvitation(b.dataset.iacc); if (r.ok) { toast("Joined."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
+  main.querySelectorAll("[data-idec]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.declineInvitation(b.dataset.idec); if (r.ok) { toast("Declined."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
 }
 
 function renderFriendDetail(friendId) {
@@ -347,7 +401,7 @@ async function renderApprovals() {
   const pending = users.filter((u) => !u.approved);
   const approved = users.filter((u) => u.approved);
   const row = (u, actions) => `<div class="bal-row">
-    <div class="avatar">${esc(initials(u.name))}</div>
+    ${avatarEl(u)}
     <div class="grow"><b>${esc(u.name)}</b>${u.username ? ` <span class="exp-meta">@${esc(u.username)}</span>` : ""} <span class="exp-meta">${esc(u.email)}</span></div>
     ${actions}</div>`;
   $("#apprBody").innerHTML = `
@@ -472,7 +526,7 @@ function renderBalances(body, l) {
     ${multi ? `<div class="card" style="margin-bottom:14px"><div class="exp-meta">Multiple currencies used — balances below are converted to <b>${l.baseCurrency}</b> using each expense's rate.</div></div>` : ""}
     <div class="card" style="padding:6px 0">
       ${rows.map((r) => `<div class="bal-row">
-        <div class="avatar">${esc(initials(r.m.name))}</div>
+        ${avatarEl(r.m)}
         <div class="grow"><b>${esc(r.m.name)}</b>${r.m.id === "you" ? " (you)" : ""}</div>
         <div class="${r.net >= 0 ? "pos" : "neg"}" style="font-weight:700">${r.net === 0 ? "settled up" : (r.net > 0 ? "gets back " : "owes ") + formatMoney(Math.abs(r.net), l.baseCurrency)}</div>
       </div>`).join("")}
@@ -491,7 +545,7 @@ function renderSettle(body, l) {
       const from = store.memberById(t.from), to = store.memberById(t.to);
       const payTo = payToFor(t.to, exps);
       return `<div class="settle-row" style="flex-wrap:wrap">
-        <div class="avatar">${esc(initials(from?.name))}</div>
+        ${avatarEl(from)}
         <div class="grow"><b>${esc(from?.name)}</b> pays <b>${esc(to?.name)}</b>${payTo ? `<div class="exp-meta" style="white-space:pre-wrap">💸 ${esc(payTo)}</div>` : ""}</div>
         <div style="font-weight:700">${formatMoney(t.amountMinor, l.baseCurrency)}</div>
         <button class="btn ghost sm" data-settle="${i}">Mark paid</button>
@@ -531,7 +585,7 @@ function renderReminders(body, l) {
       const transfers = settleUp(base).filter((t) => t.from === d.m.id);
       return `<div class="card" style="margin-bottom:12px">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
-          <div class="avatar">${esc(initials(d.m.name))}</div>
+          ${avatarEl(d.m)}
           <div class="grow"><b>${esc(d.m.name)}</b> <span class="exp-meta">${d.m.email ? esc(d.m.email) : "⚠️ no email on file"}</span></div>
           <div class="neg" style="font-weight:700">owes ${formatMoney(-d.net, l.baseCurrency)}</div>
           <button class="btn ghost sm" data-copy="${d.m.id}">Copy email</button>
@@ -594,10 +648,12 @@ function renderMembers(body, l) {
     // toggle only for real users who aren't the owner and aren't admin-via-group
     const canToggle = iAmAdmin && id !== "you" && m && m.userId && !owner && !via;
     const toggleBtn = canToggle ? `<button class="btn ghost sm" data-admin="${m.userId}" data-make="${own ? "0" : "1"}">${own ? "Remove admin" : "Make admin"}</button>` : "";
+    // quick add-friend for a co-member who isn't your friend yet
+    const friendBtn = (CLOUD && id !== "you" && m && m.userId && !store.isFriend(m.userId)) ? `<button class="btn ghost sm" data-friendadd="${m.userId}" data-fname="${esc(m.name)}" title="Send friend request">＋ Friend</button>` : "";
     return `<div class="bal-row">
-      <div class="avatar" data-profile="${id}" style="cursor:pointer">${esc(initials(m?.name))}</div>
+      ${avatarEl(m, { cls: "clk", attrs: `data-profile="${id}"` })}
       <div class="grow" data-profile="${id}" style="cursor:pointer"><b>${esc(m?.name)}</b>${id === "you" ? " (you)" : ""}${adminBadge}${handle} ${meta}${pending ? ` <span class="tag" style="color:var(--amber)">invited · not signed up yet</span>` : ""}</div>
-      ${toggleBtn}
+      ${friendBtn}${toggleBtn}
       ${(id === "you" || !admin) ? "" : `<button class="icon-btn" data-remove="${id}" title="Remove from ${esc(ledgerDisplayName(l))}">✖</button>`}
     </div>`;
   }).join("");
@@ -618,7 +674,8 @@ function renderMembers(body, l) {
       gp.forEach((m) => groupIds.add(m.id));
       if (gp.length) groupSection = `<div class="card" style="margin-bottom:12px"><label style="margin-top:0">👥 Add from group “${esc(parent.name)}”</label><div class="chips">${gp.map(friendChip).join("")}</div></div>`;
     }
-    const friends = store.state.people.filter((p) => !inLedger.has(p.id) && !groupIds.has(p.id));
+    const pendingIds = new Set((l.pendingInvites || []).map((p) => p.userId).filter(Boolean));
+    const friends = store.friends().filter((p) => !inLedger.has(p.id) && !groupIds.has(p.id) && !pendingIds.has(p.userId));
     addHtml = `
       <h3 style="margin:20px 0 10px">Add people</h3>
       ${groupSection}
@@ -645,7 +702,37 @@ function renderMembers(body, l) {
       </div>`;
   }
 
-  body.innerHTML = `${inheritNote}<div class="card" style="padding:6px 0">${membersHtml}</div>${addHtml}`;
+  // Leave section — any member can leave a group/trip (creator deletes instead).
+  const leaveHtml = (CLOUD && l.kind !== "individual") ? `
+    <div class="card" style="margin-top:16px">
+      ${l.iAmOwner
+        ? `<div class="exp-meta">You created this ${kindLabel[l.kind].toLowerCase()}. To remove it, use <b>Settings → Delete</b>.</div>`
+        : `<button class="btn danger" id="leaveLedger">🚪 Leave ${esc(ledgerDisplayName(l))}</button>
+           <div class="hint" style="margin-top:6px">You'll be removed and stop seeing its expenses. You can only leave once your balance here is settled up.</div>`}
+    </div>` : "";
+  const pendingHtml = (CLOUD && (l.pendingInvites || []).length) ? `
+    <h3 style="margin:20px 0 8px">Pending invitations</h3>
+    <div class="card" style="padding:6px 0">${l.pendingInvites.map((p) => `<div class="bal-row">${avatarEl(p)}<div class="grow"><b>${esc(p.name)}</b>${p.username ? ` <span class="exp-meta">@${esc(p.username)}</span>` : ""} <span class="tag" style="color:var(--amber)">awaiting acceptance</span></div>${admin ? `<button class="icon-btn" data-cancelinv="${esc(p.id)}" title="Cancel invite">✖</button>` : ""}</div>`).join("")}</div>` : "";
+  const linkHtml = (CLOUD && admin && l.kind !== "individual") ? `<div class="card" style="margin-top:14px"><label style="margin-top:0">🔗 Shareable invite link</label><div class="row"><input value="${esc(store.ledgerLink(l))}" readonly><button class="btn ghost" id="copyLedgerLink" style="flex:none">Copy</button></div><div class="hint" style="margin-top:6px">Anyone who opens it is asked to join ${esc(ledgerDisplayName(l))}.</div></div>` : "";
+  body.innerHTML = `${inheritNote}<div class="card" style="padding:6px 0">${membersHtml}</div>${pendingHtml}${addHtml}${linkHtml}${leaveHtml}`;
+  if ($("#copyLedgerLink")) $("#copyLedgerLink").onclick = () => copyLink(store.ledgerLink(l), `${ledgerDisplayName(l)} invite link`);
+  body.querySelectorAll("[data-friendadd]").forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    const r = await store.sendFriendRequestUid(b.dataset.friendadd);
+    if (r.ok) toast(`Friend request sent to ${b.dataset.fname || "them"}.`); else { b.disabled = false; toast(r.error || "Couldn't send."); }
+  });
+  body.querySelectorAll("[data-cancelinv]").forEach((b) => b.onclick = () => {
+    confirmDelete("Cancel this invitation?", async () => { await store.cancelInvite(l.id, b.dataset.cancelinv); render(); toast("Invitation cancelled."); }, { confirmLabel: "Cancel invite" });
+  });
+  const lv = $("#leaveLedger");
+  if (lv) lv.onclick = () => {
+    const { base } = computeBalances(rolledExpenses(l), l.baseCurrency);
+    if (Math.round(base.get("you") || 0) !== 0) return toast("Settle up your balance here before leaving.");
+    confirmDelete(`Leave ${ledgerDisplayName(l)}? You'll be removed and won't see its expenses anymore.`, async () => {
+      const r = await store.leaveLedger(l.id);
+      if (r.ok) { view = { type: "dashboard" }; render(); toast("You left."); } else toast(r.error || "Couldn't leave.");
+    }, { confirmLabel: "Leave" });
+  };
   body.querySelectorAll("[data-remove]").forEach((b) => b.onclick = () => {
     const m = store.memberById(b.dataset.remove);
     confirmDelete(`Remove ${m ? m.name : "this person"} from ${ledgerDisplayName(l)}?`, () => { store.updateLedger(l.id, { memberIds: l.memberIds.filter((x) => x !== b.dataset.remove) }); render(); toast("Removed."); }, { confirmLabel: "Remove", phrase: CONFIRM_WORD });
@@ -689,7 +776,7 @@ function openFriendProfile(m) {
   const pending = CLOUD && !m.userId && m.email;
   modal("Profile", `
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
-      <div class="avatar" style="width:46px;height:46px;font-size:16px">${esc(initials(m.name))}</div>
+      <div class="avatar" style="width:46px;height:46px;font-size:16px;background:${avColor(m)}">${esc(initials(m.name))}</div>
       <div><div style="font-weight:700;font-size:17px">${esc(m.name)}</div>${m.username ? `<div class="exp-meta">@${esc(m.username)}</div>` : ""}</div>
     </div>
     <label style="margin-top:0">Email</label><div class="mail-preview">${m.email ? esc(m.email) : "—"}</div>
@@ -898,21 +985,35 @@ function openPersonModal(id) {
     <label>Email ${id === "you" ? "(so reminders are sent from a name people recognize)" : "(for reminders)"}</label>
     <input id="pEmail" value="${esc(m.email || "")}" placeholder="name@example.com">
     ${showUser ? `<label>Username</label>
-      <div class="row"><input id="pUser" value="${store.state.you.username ? "@" + esc(store.state.you.username) : ""}" placeholder="not set" disabled style="opacity:.85">
-      <button class="btn ghost" id="pUserBtn" style="flex:none">Change</button></div>` : ""}
+      ${store.state.you.username
+        ? `<div class="mail-preview">@${esc(store.state.you.username)} <span class="exp-meta">· permanent, can't be changed</span></div>`
+        : `<div class="row"><input id="pUser" value="" placeholder="not set" disabled style="opacity:.85"><button class="btn ghost" id="pUserBtn" style="flex:none">Set username</button></div>`}` : ""}
+    ${showUser ? `<label>Thumbnail color</label>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div class="avatar" id="avPreview" style="background:${avColor(store.state.you)}">${esc(initials(store.state.you.name))}</div>
+        <div class="chips" id="avSwatches">${AVATAR_COLORS.map((c) => `<span class="av-swatch${(store.state.you.color || "#2f6fd6") === c ? " on" : ""}" data-color="${c}" style="background:${c}"></span>`).join("")}</div>
+      </div>` : ""}
   `, `<button class="btn ghost" data-close>Cancel</button><button class="btn" id="pSave">Save</button>`);
-  if (showUser) $("#pUserBtn").onclick = () => { closeModal(); openUsernameModal(false); };
-  $("#pSave").onclick = () => { store.updatePerson(id, { name: $("#pName").value.trim() || m.name, email: $("#pEmail").value.trim() }); closeModal(); render(); toast("Saved."); };
+  if (showUser && $("#pUserBtn")) $("#pUserBtn").onclick = () => { closeModal(); openUsernameModal(false); };
+  let pickedColor = store.state.you.color || null;
+  if (showUser) $("#avSwatches").querySelectorAll("[data-color]").forEach((s) => s.onclick = () => {
+    pickedColor = s.dataset.color;
+    $("#avSwatches").querySelectorAll("[data-color]").forEach((x) => x.classList.toggle("on", x === s));
+    const pv = $("#avPreview"); if (pv) pv.style.background = pickedColor;
+  });
+  $("#pSave").onclick = async () => {
+    store.updatePerson(id, { name: $("#pName").value.trim() || m.name, email: $("#pEmail").value.trim() });
+    if (showUser && pickedColor !== (store.state.you.color || null)) await store.setAvatarColor(pickedColor);
+    closeModal(); render(); toast("Saved.");
+  };
 }
 
 // Username picker with a LIVE availability check against the database.
 // required=true → shown on first sign-in and can't be dismissed until set.
 function openUsernameModal(required) {
   const cur = store.state.you.username || "";
-  modal(required ? "Pick your username" : "Change username", `
-    <p class="hint" style="margin-top:0">${required
-      ? "Choose a unique username so friends can add you by <b>@username</b>. You can change it later in your profile."
-      : "Your unique handle — friends can add you by <b>@username</b>. Type a new one to check if it's free."}</p>
+  modal("Pick your username", `
+    <p class="hint" style="margin-top:0">Choose a unique username so friends can add you by <b>@username</b>. <b>Pick carefully — it's permanent and can't be changed later.</b></p>
     <label>Username</label>
     <div style="position:relative">
       <span style="position:absolute;left:11px;top:11px;color:var(--muted)">@</span>
@@ -1226,6 +1327,7 @@ function render() {
   else if (view.type === "friends") renderFriends();
   else if (view.type === "friend") renderFriendDetail(view.friendId);
   else if (view.type === "approvals") renderApprovals();
+  else if (view.type === "invitations") renderInvitations();
   else renderLedger();
   try { localStorage.setItem("uno.view", JSON.stringify(view)); } catch (e) {}
 }
@@ -1244,8 +1346,8 @@ function openPeopleModal() {
   modal("People", `
     <p class="hint" style="margin-top:0">${CLOUD ? "People across your groups. To add someone new, open a group's <b>Members</b> tab and add them by email." : "Friends you split with. Add their email so reminders can reach them."}</p>
     <div class="card" style="padding:6px 0">
-      <div class="bal-row"><div class="avatar">${esc(initials(store.state.you.name))}</div><div class="grow"><b>${esc(store.state.you.name)}</b> (you)</div><button class="btn ghost sm" id="editYou">Edit</button></div>
-      ${people.map((p) => `<div class="bal-row"><div class="avatar">${esc(initials(p.name))}</div><div class="grow"><b>${esc(p.name)}</b> <span class="exp-meta">${p.email ? esc(p.email) : "no email"}</span>${CLOUD && !p.userId && p.email ? ` <span class="tag" style="color:var(--amber)">pending</span>` : ""}</div>${CLOUD ? "" : `<button class="icon-btn" data-pedit="${p.id}">✏️</button>`}<button class="icon-btn" data-pdel="${p.id}">🗑️</button></div>`).join("")}
+      <div class="bal-row">${avatarEl(store.state.you)}<div class="grow"><b>${esc(store.state.you.name)}</b> (you)</div><button class="btn ghost sm" id="editYou">Edit</button></div>
+      ${people.map((p) => `<div class="bal-row">${avatarEl(p)}<div class="grow"><b>${esc(p.name)}</b> <span class="exp-meta">${p.email ? esc(p.email) : "no email"}</span>${CLOUD && !p.userId && p.email ? ` <span class="tag" style="color:var(--amber)">pending</span>` : ""}</div>${CLOUD ? "" : `<button class="icon-btn" data-pedit="${p.id}">✏️</button>`}<button class="icon-btn" data-pdel="${p.id}">🗑️</button></div>`).join("")}
     </div>
     ${CLOUD ? "" : `<div class="row" style="margin-top:14px"><input id="ppName" placeholder="name"><input id="ppEmail" placeholder="email"><button class="btn" id="ppAdd" style="flex:none">Add</button></div>`}
   `, `<button class="btn ghost" data-close>Close</button>`);
@@ -1263,6 +1365,24 @@ function addSignOut() {
     b.onclick = () => signOut();
     foot.appendChild(b);
   }
+}
+
+// Everyone gets an "Invitations" item in the sidebar with a red-dot count.
+function addInboxNav() {
+  if (!CLOUD) return;
+  const nav = document.querySelector(".nav");
+  if (!nav || document.getElementById("inboxNav")) return;
+  const b = document.createElement("button");
+  b.className = "nav-item"; b.id = "inboxNav"; b.dataset.view = "invitations";
+  b.innerHTML = `✉️ <span>Invitations</span> <span class="nav-dot" id="inboxDot" hidden></span>`;
+  b.onclick = () => { view = { type: "invitations" }; setSidebar(false); render(); };
+  nav.appendChild(b);
+}
+function updateInboxBadge() {
+  const dot = document.getElementById("inboxDot");
+  if (!dot) return;
+  const n = CLOUD && store.pendingCount ? store.pendingCount() : 0;
+  if (n > 0) { dot.textContent = n; dot.hidden = false; } else { dot.hidden = true; }
 }
 
 // Platform admins get an "Approvals" item in the sidebar.
@@ -1288,6 +1408,7 @@ async function boot() {
     }
     if (!ok) return; // login screen is showing; don't render the app
     addSignOut();
+    addInboxNav();
     addAdminNav();
     restoreView();
     render();

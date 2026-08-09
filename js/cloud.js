@@ -100,6 +100,29 @@ async function notifyAdminsOfSignup(sb, user) {
   } catch (e) { console.error("[cloud] notify admins failed:", e.message || e); }
 }
 
+const escH = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// Shown when someone opens a shareable invite link (?invite=token) while logged in.
+function inviteAcceptScreen(store, token, info) {
+  const app = document.getElementById("app");
+  const isFriend = info.type === "friend";
+  const what = isFriend ? `be friends with <b>${escH(info.name)}</b>` : `join the ${info.type} <b>${escH(info.name)}</b>`;
+  app.innerHTML = `<div class="login-screen"><div class="login-card">
+    <div class="login-brand"><img src="./assets/logo.svg" alt="UNO Ledger" style="width:44px;height:44px"><h1>UNO Ledger</h1></div>
+    <div class="card" style="margin-top:4px"><h3 style="margin:0 0 8px">✉️ You've been invited</h3>
+      <p class="hint" style="margin:0">You've been invited to ${what} on UNO Ledger.</p></div>
+    <div class="row" style="margin-top:12px"><button class="btn" id="invAcc">Accept</button><button class="btn ghost" id="invDec">Decline</button></div>
+    <div id="invMsg" class="login-msg"></div>
+  </div></div>`;
+  const done = () => { try { localStorage.removeItem("uno.inviteToken"); } catch {} window.location.href = appUrl(); };
+  document.getElementById("invAcc").onclick = async () => {
+    document.getElementById("invAcc").disabled = true;
+    const r = await store.acceptShared(token, info.type);
+    if (r.ok) done(); else { document.getElementById("invMsg").textContent = r.error || "Couldn't accept."; document.getElementById("invAcc").disabled = false; }
+  };
+  document.getElementById("invDec").onclick = () => done();
+}
+
 // The "you're signed in but need approval" screen.
 function pendingScreen(user) {
   const app = document.getElementById("app");
@@ -157,9 +180,10 @@ function translateExpenseData(data, from, to) {
 class CloudStore {
   constructor(client) {
     this.sb = client;
-    this.state = { version: 1, you: { id: "you", name: "You", email: "" }, people: [], ledgers: [], expenses: [] };
+    this.state = { version: 1, you: { id: "you", name: "You", email: "" }, people: [], ledgers: [], expenses: [], friends: [], friendRequests: [], invitations: [] };
     this.listeners = new Set();
     this.isPlatformAdmin = false; // one of the three platform admins?
+    this.nameById = new Map();    // member_ref -> {name,...} for anyone (active/pending/left)
     // my member_ref can differ per ledger: it's my auth id in ledgers I created,
     // but a generated "pending" id in ledgers I was invited to. Track per ledger.
     this.myRefByLedger = {};
@@ -175,11 +199,13 @@ class CloudStore {
     // Load the profile if it exists (don't clobber a name/username the user set);
     // create it on very first login.
     await this._try("profile load", async () => {
-      const { data: prof } = await this.sb.from("profiles").select("display_name,email,username").eq("id", myId).maybeSingle();
+      const { data: prof } = await this.sb.from("profiles").select("display_name,email,username,friend_token,avatar_color").eq("id", myId).maybeSingle();
       if (prof) {
         you.name = prof.display_name || you.name;
         you.email = (prof.email || myEmail || "").toLowerCase();
         you.username = prof.username || null;
+        you.friendToken = prof.friend_token || null;
+        you.color = prof.avatar_color || null;
       } else {
         await this.sb.from("profiles").insert({ id: myId, display_name: you.name, email: (myEmail || "").toLowerCase() });
         you.username = null;
@@ -224,7 +250,7 @@ class CloudStore {
       const pr = (m.user_id && profById.get(m.user_id)) || (m.email && profByEmail.get((m.email || "").toLowerCase())) || null;
       if (!pr) continue;
       const wasPending = !m.user_id;
-      m.name = goodName(pr); m.username = pr.username || null; m.email = pr.email || m.email;
+      m.name = goodName(pr); m.username = pr.username || null; m.email = pr.email || m.email; m.color = pr.avatar_color || null;
       if (wasPending && pr.id !== myId) {
         m.user_id = pr.id; // resolve locally + queue a DB heal
         heals.push({ ledger_id: m.ledger_id, member_ref: m.member_ref, user_id: pr.id, name: m.name, username: m.username, email: (m.email || "").toLowerCase() || null });
@@ -234,38 +260,43 @@ class CloudStore {
       .update({ user_id: h.user_id, name: h.name, username: h.username, email: h.email })
       .eq("ledger_id", h.ledger_id).eq("member_ref", h.member_ref));
 
-    // my ref in each ledger = the member row whose user_id is me
+    // my ref in each ledger = the member row whose user_id is me (and still active)
     this.myRefByLedger = {};
     for (const l of ledgers) {
-      const mine = members.find((m) => m.ledger_id === l.id && m.user_id === myId);
+      const mine = members.find((m) => m.ledger_id === l.id && m.user_id === myId && !m.has_left);
       this.myRefByLedger[l.id] = mine ? mine.member_ref : myId;
     }
-    // people = every member that isn't me, deduped by ref
+    // Resolve any member_ref → current name (active, pending, or left) for display.
+    const nameById = new Map();
+    for (const m of members) if (m.name) nameById.set(m.member_ref, { name: m.name, email: m.email || "", username: m.username || null, userId: m.user_id || null, color: m.color || null });
+    this.nameById = nameById;
+
+    // people = every ACTIVE (accepted + not left) co-member that isn't me. Used only
+    // for name resolution now — the Friends list is explicit (state.friends below).
     const myRefs = new Set(Object.values(this.myRefByLedger));
     const peopleMap = new Map();
     for (const m of members) {
       if (m.user_id === myId || myRefs.has(m.member_ref)) continue;
-      if (!peopleMap.has(m.member_ref)) peopleMap.set(m.member_ref, { id: m.member_ref, name: m.name, email: m.email || "", username: m.username || null, userId: m.user_id || null });
+      if (m.has_left || !m.accepted) continue;
+      if (!peopleMap.has(m.member_ref)) peopleMap.set(m.member_ref, { id: m.member_ref, name: m.name, email: m.email || "", username: m.username || null, userId: m.user_id || null, color: m.color || null });
     }
     this.state.people = [...peopleMap.values()];
     this.state.ledgers = ledgers.map((l) => {
       const myRef = this.myRefByLedger[l.id];
       const admins = l.admins || [];
-      // Collapse rows that resolve to the same person (e.g. a pending invite row
-      // plus a signed-up row for the same user) so nobody appears twice.
-      const seenIdentity = new Set();
-      const dedupMembers = members.filter((m) => m.ledger_id === l.id)
-        // Prefer the signed-up row (has user_id) over a stale pending row for the same person.
+      const rows = members.filter((m) => m.ledger_id === l.id);
+      const seen = new Set();
+      const active = rows.filter((m) => !m.has_left && m.accepted)
         .sort((a, b) => (b.user_id ? 1 : 0) - (a.user_id ? 1 : 0))
-        .filter((m) => {
-          const key = ((m.email || "").toLowerCase()) || m.user_id || m.member_ref;
-          if (seenIdentity.has(key)) return false;
-          seenIdentity.add(key); return true;
-        });
+        .filter((m) => { const k = ((m.email || "").toLowerCase()) || m.user_id || m.member_ref; if (seen.has(k)) return false; seen.add(k); return true; });
+      const pending = rows.filter((m) => !m.has_left && !m.accepted)
+        .map((m) => ({ id: m.member_ref, name: m.name, email: m.email || "", username: m.username || null, userId: m.user_id || null }));
       return {
         id: l.id, kind: l.kind, name: l.name, baseCurrency: l.base_currency,
         parentId: l.parent_id,
-        memberIds: dedupMembers.map((m) => mapRef(m.member_ref, myRef, "you")),
+        memberIds: active.map((m) => mapRef(m.member_ref, myRef, "you")),
+        pendingInvites: pending,
+        joinToken: l.join_token || null,
         reminder: l.reminder || { enabled: false, frequency: "weekly", lastSentAt: null, message: "" },
         admins, createdBy: l.created_by,
         iAmAdmin: l.created_by === myId || admins.includes(myId),
@@ -274,20 +305,115 @@ class CloudStore {
       };
     });
     this.state.expenses = expenses.map((e) => ({ id: e.id, ledgerId: e.ledger_id, createdAt: new Date(e.created_at).getTime(), mine: e.created_by === myId, ...translateExpenseData(e.data, this.myRefByLedger[e.ledger_id] || myId, "you") }));
+
+    // ---- social layer: explicit friends + incoming requests + group/trip invites ----
+    this.state.friends = []; this.state.friendRequests = []; this.state.invitations = [];
+    await this._try("friends", async () => {
+      const { data } = await this.sb.rpc("my_friends");
+      this.state.friends = (data || []).map((f) => ({ id: f.id, name: f.name || (f.email || "").split("@")[0], username: f.username || null, email: f.email || "", userId: f.id, color: f.avatar_color || null }));
+    });
+    await this._try("friend requests", async () => {
+      const { data } = await this.sb.rpc("my_friend_requests");
+      this.state.friendRequests = (data || []).map((r) => ({ id: r.friendship_id, requester: r.requester, name: r.name || (r.email || "").split("@")[0], username: r.username || null, email: r.email || "" }));
+    });
+    await this._try("invitations", async () => {
+      const { data } = await this.sb.rpc("my_invitations");
+      this.state.invitations = (data || []).map((i) => ({ ledgerId: i.ledger_id, kind: i.kind, name: i.name, inviter: i.inviter || "Someone" }));
+    });
+
     this._notify();
     if (this.state.you.username) this._propagateSelf(); // refresh my copies for others
   }
+  // Count for the sidebar red-dot: pending friend requests + group/trip invites.
+  pendingCount() { return (this.state.friendRequests?.length || 0) + (this.state.invitations?.length || 0); }
 
   // ---- reads (mirror LocalStore) ----
-  allMembers() { return [this.state.you, ...this.state.people]; }
-  memberById(id) { return this.allMembers().find((m) => m.id === id); }
+  allMembers() { return [this.state.you, ...this.state.people, ...(this.state.friends || [])]; }
+  memberById(id) {
+    const m = this.allMembers().find((x) => x.id === id);
+    if (m) return m;
+    const n = this.nameById && this.nameById.get(id); // pending/left member — resolve name for display
+    return n ? { id, ...n } : undefined;
+  }
+  friends() { return this.state.friends || []; }
+  async setAvatarColor(color) {
+    this.state.you.color = color || null; this._notify();
+    await this._try("avatar color", () => this.sb.from("profiles").update({ avatar_color: color || null }).eq("id", myId));
+    return { ok: true };
+  }
+  isFriend(userId) { return !!userId && (this.state.friends || []).some((f) => f.userId === userId || f.id === userId); }
+  friendLink() { return appUrl() + "?invite=" + (this.state.you.friendToken || ""); }
+  ledgerLink(l) { return l && l.joinToken ? appUrl() + "?invite=" + l.joinToken : ""; }
+
+  // ---- friends (explicit, consent-based) ----
+  async sendFriendRequest(identifier) {
+    try {
+      const { data, error } = await this.sb.rpc("send_friend_request", { p_identifier: identifier });
+      if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Couldn't send request." };
+      if (data.email) {
+        const type = data.status === "invited" ? "friend-invite" : "friend-request";
+        this._try("friend req email", () => this.sb.functions.invoke("notify-member", { body: { type, email: data.email, name: this.state.you.name, link: this.friendLink(), inviterName: this.state.you.name } }));
+      }
+      return { ok: true, status: data.status };
+    } catch (e) { return { ok: false, error: e.message || String(e) }; }
+  }
+  async sendFriendRequestUid(userId) {
+    try {
+      const { data, error } = await this.sb.rpc("send_friend_request_uid", { p_user: userId });
+      if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Couldn't send request." };
+      if (data.email) this._try("friend req email", () => this.sb.functions.invoke("notify-member", { body: { type: "friend-request", email: data.email, name: this.state.you.name, link: this.friendLink(), inviterName: this.state.you.name } }));
+      return { ok: true, status: data.status };
+    } catch (e) { return { ok: false, error: e.message || String(e) }; }
+  }
+  async acceptFriendRequest(friendshipId) {
+    const { data, error } = await this.sb.rpc("accept_friend_request", { p_friendship: friendshipId });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
+    await this.hydrate(); return { ok: true };
+  }
+  async declineFriendRequest(friendshipId) {
+    const { data, error } = await this.sb.rpc("decline_friend_request", { p_friendship: friendshipId });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
+    if (data.requester_email) this._try("decline email", () => this.sb.functions.invoke("notify-member", { body: { type: "friend-declined", email: data.requester_email, name: this.state.you.name, link: appUrl(), inviterName: this.state.you.name } }));
+    await this.hydrate(); return { ok: true };
+  }
+  async unfriendUser(userId) {
+    const { error } = await this.sb.rpc("unfriend", { p_user: userId });
+    if (error) return { ok: false, error: error.message };
+    await this.hydrate(); return { ok: true };
+  }
+
+  // ---- group/trip invitations ----
+  async acceptInvitation(ledgerId) {
+    const { data, error } = await this.sb.rpc("accept_invitation", { p_ledger: ledgerId });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
+    await this.hydrate(); return { ok: true };
+  }
+  async declineInvitation(ledgerId) {
+    const { data, error } = await this.sb.rpc("decline_invitation", { p_ledger: ledgerId });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
+    if (data.inviter_email) this._try("decline invite email", () => this.sb.functions.invoke("notify-member", { body: { type: "invite-declined", email: data.inviter_email, name: this.state.you.name, groupName: data.ledger || "a group", link: appUrl(), inviterName: this.state.you.name } }));
+    await this.hydrate(); return { ok: true };
+  }
+
+  // ---- shareable invite links ----
+  async resolveInvite(token) {
+    try { const { data } = await this.sb.rpc("resolve_invite", { p_token: token }); return data || null; }
+    catch (e) { console.error("[cloud] resolve invite failed:", e.message || e); return null; }
+  }
+  async acceptShared(token, type) {
+    const fn = type === "friend" ? "befriend_by_token" : "join_ledger_by_token";
+    const { data, error } = await this.sb.rpc(fn, { p_token: token });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Couldn't accept." };
+    await this.hydrate(); return { ok: true, ...data };
+  }
   // Is someone with this identity already a member of the ledger? Matches on the
   // underlying user id, email, or username — not just the member_ref — so the same
   // person can't be added twice (e.g. once as a pending invite, once after signing up).
   _existingMember(l, { userId = null, email = null, username = null } = {}) {
     const em = (email || "").toLowerCase() || null;
     const un = (username || "").toLowerCase() || null;
-    return l.memberIds.map((id) => this.memberById(id)).find((m) => m && (
+    const cand = [...l.memberIds.map((id) => this.memberById(id)), ...(l.pendingInvites || [])];
+    return cand.find((m) => m && (
       (userId && m.userId && m.userId === userId) ||
       (em && (m.email || "").toLowerCase() === em) ||
       (un && (m.username || "").toLowerCase() === un)
@@ -301,9 +427,29 @@ class CloudStore {
 
   // ---- helpers for member rows ----
   _memberRow(ledgerId, ref) {
-    if (ref === "you") return { ledger_id: ledgerId, member_ref: this._myRef(ledgerId), name: this.state.you.name, email: (this.state.you.email || myEmail || "").toLowerCase() || null, username: this.state.you.username || null, user_id: myId };
+    // has_left:false — (re)adding a member always makes them active again, which
+    // reactivates a row they'd previously left and re-links their old expenses.
+    if (ref === "you") return { ledger_id: ledgerId, member_ref: this._myRef(ledgerId), name: this.state.you.name, email: (this.state.you.email || myEmail || "").toLowerCase() || null, username: this.state.you.username || null, user_id: myId, has_left: false };
     const p = this.state.people.find((x) => x.id === ref);
-    return { ledger_id: ledgerId, member_ref: ref, name: p?.name || "Friend", email: (p?.email || "").toLowerCase() || null, username: p?.username || null, user_id: p?.userId || null };
+    return { ledger_id: ledgerId, member_ref: ref, name: p?.name || "Friend", email: (p?.email || "").toLowerCase() || null, username: p?.username || null, user_id: p?.userId || null, has_left: false };
+  }
+
+  // If this person already has a row in this ledger (active OR left), return its
+  // member_ref so we reuse it — that re-links every past expense to them instead
+  // of stranding their history under an old id. Null if they've never been in it.
+  async _existingRefFor(ledgerId, { userId = null, email = null }) {
+    try {
+      if (userId) {
+        const { data } = await this.sb.from("ledger_members").select("member_ref").eq("ledger_id", ledgerId).eq("user_id", userId).limit(1);
+        if (data && data.length) return data[0].member_ref;
+      }
+      const em = (email || "").toLowerCase();
+      if (em) {
+        const { data } = await this.sb.from("ledger_members").select("member_ref").eq("ledger_id", ledgerId).ilike("email", em).limit(1);
+        if (data && data.length) return data[0].member_ref;
+      }
+    } catch (e) { console.error("[cloud] existing-ref lookup failed:", e.message || e); }
+    return null;
   }
 
   // Keep my own name/username/email copies fresh across every ledger I'm in, so
@@ -382,10 +528,17 @@ class CloudStore {
     // Don't add the same underlying person twice (e.g. once pending, once signed up).
     const already = this._existingMember(l, { userId: person.userId, email: person.email, username: person.username });
     if (already) return { ok: false, name: already.name, already: true };
-    l.memberIds = [...new Set([...l.memberIds, personId])]; this._notify();
-    await this._try("add friend to ledger", () => this.sb.from("ledger_members").upsert(this._memberRow(ledgerId, personId), { onConflict: "ledger_id,member_ref" }));
-    const emailed = person.email ? await this._notifyMember("added", person.email, person.name, l.name, l.kind === "individual" ? "friend" : "group") : false;
-    return { ok: true, emailed, name: person.name };
+    // reuse their prior member_ref here (if they were once in this ledger) so a
+    // rejoin re-links all their past expenses. Reactivates the row (has_left:false).
+    const ref = (await this._existingRefFor(ledgerId, { userId: person.userId, email: person.email })) || personId;
+    const pendingInvite = l.kind !== "individual";
+    if (pendingInvite) { (l.pendingInvites = l.pendingInvites || []).push({ id: ref, name: person.name, email: person.email || "", username: person.username || null, userId: person.userId || null }); }
+    else { l.memberIds = [...new Set([...l.memberIds, ref])]; }
+    this._notify();
+    const row = { ledger_id: ledgerId, member_ref: ref, name: person.name, email: (person.email || "").toLowerCase() || null, username: person.username || null, user_id: person.userId || null, has_left: false, accepted: !pendingInvite };
+    await this._try("add friend to ledger", () => this.sb.from("ledger_members").upsert(row, { onConflict: "ledger_id,member_ref" }));
+    const emailed = person.email ? await this._notifyMember(pendingInvite ? "invite" : "added", person.email, person.name, l.name, l.kind === "individual" ? "friend" : "group") : false;
+    return { ok: true, emailed, name: person.name, pending: pendingInvite };
   }
 
   // ---- usernames ----
@@ -442,13 +595,19 @@ class CloudStore {
       if (already) return { status: "exists", message: `${already.name || user.display_name || "They"} are already in this group.` };
       const label = user.display_name || user.username || (email ? email.split("@")[0] : handle);
       const resolvedEmail = email || user.email || ""; // works whether added by email or username
-      let person = this.state.people.find((p) => p.id === user.id);
-      if (!person) { person = { id: user.id, name: label, email: resolvedEmail, username: user.username || null, userId: user.id }; this.state.people.push(person); }
-      else { person.userId = user.id; if (resolvedEmail) person.email = resolvedEmail; if (user.username) person.username = user.username; }
-      l.memberIds = [...new Set([...l.memberIds, user.id])]; this._notify();
-      await this._try("add member", () => this.sb.from("ledger_members").upsert(this._memberRow(ledgerId, user.id), { onConflict: "ledger_id,member_ref" }));
-      const emailed = person.email ? await this._notifyMember("added", person.email, person.name, l.name, l.kind === "individual" ? "friend" : "group") : false;
-      return { status: "added", name: person.name, emailed };
+      // reuse their prior member_ref here (if they were once in this ledger) so
+      // rejoining re-links all their past expenses instead of starting fresh.
+      const ref = (await this._existingRefFor(ledgerId, { userId: user.id, email: resolvedEmail })) || user.id;
+      let person = this.state.people.find((p) => p.id === ref) || this.state.people.find((p) => p.userId === user.id)
+        || { id: ref, name: label, email: resolvedEmail, username: user.username || null, userId: user.id };
+      person.id = ref; person.userId = user.id; if (resolvedEmail) person.email = resolvedEmail; if (user.username) person.username = user.username;
+      const pendingInvite = l.kind !== "individual"; // groups/trips must be accepted; 1:1 is instant
+      if (pendingInvite) { (l.pendingInvites = l.pendingInvites || []).push({ id: ref, name: person.name, email: person.email || "", username: person.username || null, userId: person.userId || null }); }
+      else { if (!this.state.people.includes(person)) this.state.people.push(person); l.memberIds = [...new Set([...l.memberIds, ref])]; }
+      this._notify();
+      await this._try("add member", () => this.sb.from("ledger_members").upsert({ ...this._memberRow(ledgerId, ref), name: person.name, email: (person.email || "").toLowerCase() || null, username: person.username || null, user_id: person.userId || null, accepted: !pendingInvite }, { onConflict: "ledger_id,member_ref" }));
+      const emailed = person.email ? await this._notifyMember(pendingInvite ? "invite" : "added", person.email, person.name, l.name, l.kind === "individual" ? "friend" : "group") : false;
+      return { status: "added", name: person.name, emailed, pending: pendingInvite };
     }
 
     // not found
@@ -457,9 +616,11 @@ class CloudStore {
     if (dupe) return { status: "exists", message: `${dupe.name} is already in this group.` };
     const ref = crypto.randomUUID();
     const person = { id: ref, name: email.split("@")[0], email, username: null, userId: null };
-    this.state.people.push(person);
-    l.memberIds = [...new Set([...l.memberIds, ref])]; this._notify();
-    await this._try("invite", () => this.sb.from("ledger_members").insert(this._memberRow(ledgerId, ref)));
+    const pendingInvite = l.kind !== "individual";
+    if (pendingInvite) { (l.pendingInvites = l.pendingInvites || []).push(person); }
+    else { this.state.people.push(person); l.memberIds = [...new Set([...l.memberIds, ref])]; }
+    this._notify();
+    await this._try("invite", () => this.sb.from("ledger_members").insert({ ...this._memberRow(ledgerId, ref), accepted: !pendingInvite }));
     const emailed = await this._notifyMember("invite", email, person.name, l.name, l.kind === "individual" ? "friend" : "group");
     return { status: "invited", email, name: person.name, link: appUrl(), emailed };
   }
@@ -536,6 +697,30 @@ class CloudStore {
     this._try("ledger delete", () => this.sb.from("ledgers").delete().eq("id", id)); // cascades members + expenses
   }
 
+  // Leave a group/trip: soft-remove myself (keeps my name for others' old expenses).
+  async leaveLedger(ledgerId) {
+    const l = this.ledgerById(ledgerId);
+    if (!l) return { ok: false, error: "Not found." };
+    if (l.iAmOwner) return { ok: false, error: "You created this — delete it in Settings instead." };
+    const myRef = this._myRef(ledgerId);
+    this.state.ledgers = this.state.ledgers.filter((x) => x.id !== ledgerId); // drop from my view
+    this.state.expenses = this.state.expenses.filter((e) => e.ledgerId !== ledgerId);
+    this._notify();
+    const { error } = await this.sb.from("ledger_members")
+      .update({ has_left: true }).eq("ledger_id", ledgerId).eq("member_ref", myRef);
+    if (error) { console.error("[cloud] leave failed:", error.message); return { ok: false, error: error.message }; }
+    return { ok: true };
+  }
+
+  // Admin cancels a pending invitation (removes the not-yet-accepted member row).
+  async cancelInvite(ledgerId, ref) {
+    const l = this.ledgerById(ledgerId);
+    if (l) l.pendingInvites = (l.pendingInvites || []).filter((p) => p.id !== ref);
+    this._notify();
+    await this._try("cancel invite", () => this.sb.from("ledger_members").delete().eq("ledger_id", ledgerId).eq("member_ref", ref));
+    return { ok: true };
+  }
+
   // ---- expenses ----
   addExpense(exp) {
     const id = crypto.randomUUID();
@@ -596,6 +781,8 @@ function loginMsg(text, ok) { const el = document.getElementById("loginMsg"); if
 // login screen is showing (app should NOT render).
 export async function startCloud() {
   const sb = await getClient();
+  // Capture a shareable invite token (?invite=…) and remember it across sign-up/redirect.
+  try { const t = new URL(window.location.href).searchParams.get("invite"); if (t) localStorage.setItem("uno.inviteToken", t); } catch {}
   const { data: { session } } = await sb.auth.getSession();
 
   if (!session) {
@@ -644,6 +831,16 @@ export async function startCloud() {
   store.state.you.email = myEmail;
   setStore(store);
   await store.hydrate();
+
+  // If they arrived via a shareable invite link, show the accept/decline screen.
+  let inviteTok = null;
+  try { inviteTok = localStorage.getItem("uno.inviteToken"); } catch {}
+  if (inviteTok) {
+    const info = await store.resolveInvite(inviteTok);
+    if (info && info.type) { inviteAcceptScreen(store, inviteTok, info); return false; }
+    try { localStorage.removeItem("uno.inviteToken"); } catch {} // invalid/expired
+  }
+
   startIdleLogout(); // begin the inactivity countdown
   return true;
 }
