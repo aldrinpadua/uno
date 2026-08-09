@@ -330,6 +330,57 @@ function renderFriendDetail(friendId) {
   wireMobile();
 }
 
+// ---------- platform admin: approvals ----------
+async function renderApprovals() {
+  const main = $("#main");
+  if (!CLOUD || !store.isPlatformAdmin) { view = { type: "dashboard" }; return render(); }
+  main.innerHTML = `${mobileBar()}
+    <div class="page-head">
+      <div><h1 class="page-title">🛡️ Approvals</h1><p class="page-sub">Approve or reject people who’ve signed up. Any of the three admins can act — the list is shared, so once someone’s approved they drop off everyone’s pending list.</p></div>
+      <button class="btn ghost" id="refreshAppr">↻ Refresh</button>
+    </div>
+    <div id="apprBody"><div class="exp-meta">Loading…</div></div>`;
+  wireMobile();
+  $("#refreshAppr").onclick = () => renderApprovals();
+
+  const users = await store.listUsersAdmin();
+  const pending = users.filter((u) => !u.approved);
+  const approved = users.filter((u) => u.approved);
+  const row = (u, actions) => `<div class="bal-row">
+    <div class="avatar">${esc(initials(u.name))}</div>
+    <div class="grow"><b>${esc(u.name)}</b>${u.username ? ` <span class="exp-meta">@${esc(u.username)}</span>` : ""} <span class="exp-meta">${esc(u.email)}</span></div>
+    ${actions}</div>`;
+  $("#apprBody").innerHTML = `
+    <h3 style="margin:18px 0 8px">Waiting for approval ${pending.length ? `<span class="tag" style="color:var(--amber)">${pending.length}</span>` : ""}</h3>
+    <div class="card" style="padding:6px 0">${pending.length
+      ? pending.map((u) => row(u, `<button class="btn sm" data-approve="${u.id}">Approve</button> <button class="icon-btn" data-reject="${u.id}" title="Reject & delete">🗑️</button>`)).join("")
+      : `<div class="exp-meta" style="padding:10px 14px">No one is waiting. 🎉</div>`}</div>
+    <h3 style="margin:22px 0 8px">Approved members</h3>
+    <div class="card" style="padding:6px 0">${approved.length
+      ? approved.map((u) => row(u, `<button class="btn ghost sm" data-revoke="${u.id}">Revoke</button>`)).join("")
+      : `<div class="exp-meta" style="padding:10px 14px">No approved members yet.</div>`}</div>`;
+
+  $("#apprBody").querySelectorAll("[data-approve]").forEach((b) => b.onclick = async () => {
+    const u = users.find((x) => x.id === b.dataset.approve); b.disabled = true;
+    const r = await store.setUserApproved(u.id, true, u.email, u.name);
+    if (r.ok) { toast(`Approved ${u.name} — emailed them.`); renderApprovals(); } else { b.disabled = false; toast(r.error || "Couldn't approve."); }
+  });
+  $("#apprBody").querySelectorAll("[data-revoke]").forEach((b) => b.onclick = () => {
+    const u = users.find((x) => x.id === b.dataset.revoke);
+    confirmDelete(`Revoke access for ${u.name}? They'll be signed out and need approval again.`, async () => {
+      const r = await store.setUserApproved(u.id, false);
+      if (r.ok) { toast(`Revoked ${u.name}.`); renderApprovals(); } else toast(r.error || "Couldn't revoke.");
+    }, { confirmLabel: "Revoke" });
+  });
+  $("#apprBody").querySelectorAll("[data-reject]").forEach((b) => b.onclick = () => {
+    const u = users.find((x) => x.id === b.dataset.reject);
+    confirmDelete(`Reject and permanently delete ${u.name} (${u.email})? This removes their account entirely.`, async () => {
+      const r = await store.rejectUser(u.id);
+      if (r.ok) { toast(`Rejected ${u.name}.`); renderApprovals(); } else toast(r.error || "Couldn't reject.");
+    }, { confirmLabel: "Delete", phrase: CONFIRM_WORD });
+  });
+}
+
 // ---------- ledger view ----------
 function renderLedger() {
   const l = store.ledgerById(view.ledgerId);
@@ -1174,6 +1225,7 @@ function render() {
   if (view.type === "dashboard") renderDashboard();
   else if (view.type === "friends") renderFriends();
   else if (view.type === "friend") renderFriendDetail(view.friendId);
+  else if (view.type === "approvals") renderApprovals();
   else renderLedger();
   try { localStorage.setItem("uno.view", JSON.stringify(view)); } catch (e) {}
 }
@@ -1213,6 +1265,18 @@ function addSignOut() {
   }
 }
 
+// Platform admins get an "Approvals" item in the sidebar.
+function addAdminNav() {
+  if (!CLOUD || !store.isPlatformAdmin) return;
+  const nav = document.querySelector(".nav");
+  if (!nav || document.getElementById("apprNav")) return;
+  const b = document.createElement("button");
+  b.className = "nav-item"; b.id = "apprNav"; b.dataset.view = "approvals";
+  b.innerHTML = `🛡️ <span>Approvals</span>`;
+  b.onclick = () => { view = { type: "approvals" }; setSidebar(false); render(); };
+  nav.appendChild(b);
+}
+
 async function boot() {
   if (CONFIG.MODE === "cloud") {
     let ok = false;
@@ -1224,6 +1288,7 @@ async function boot() {
     }
     if (!ok) return; // login screen is showing; don't render the app
     addSignOut();
+    addAdminNav();
     restoreView();
     render();
     if (!store.state.you.username) openUsernameModal(true); // required on first sign-in

@@ -72,6 +72,57 @@ function startIdleLogout() {
   }, 15000);
 }
 
+// ---------- invite-only platform: approval gate ----------
+// Kept in sync with supabase/approvals.sql (is_platform_admin). Emails are public.
+const ADMIN_EMAILS = ["aldrin.d.padua@gmail.com", "drinmeetsworld@gmail.com", "apadua@stevens.edu"];
+
+// Make sure a profile row exists so admins can see and approve a new signup.
+async function ensureOwnProfile(sb, name) {
+  try {
+    await sb.from("profiles").upsert(
+      { id: myId, display_name: name, email: (myEmail || "").toLowerCase() || null },
+      { onConflict: "id", ignoreDuplicates: true }, // never clobber an existing name/username
+    );
+  } catch (e) { console.error("[cloud] ensure profile failed:", e.message || e); }
+}
+
+// Email all three admins that someone is waiting — once per person per browser.
+async function notifyAdminsOfSignup(sb, user) {
+  const key = "uno.signupNotified." + user.id;
+  try { if (localStorage.getItem(key)) return; } catch {}
+  try {
+    for (const to of ADMIN_EMAILS) {
+      await sb.functions.invoke("notify-member", {
+        body: { type: "approval-request", email: to, name: `${user.name || "Someone"} (${user.email})`, link: appUrl(), inviterName: "UNO Ledger" },
+      });
+    }
+    try { localStorage.setItem(key, "1"); } catch {}
+  } catch (e) { console.error("[cloud] notify admins failed:", e.message || e); }
+}
+
+// The "you're signed in but need approval" screen.
+function pendingScreen(user) {
+  const app = document.getElementById("app");
+  app.innerHTML = `
+    <div class="login-screen">
+      <div class="login-card">
+        <div class="login-brand"><img src="./assets/logo.svg" alt="UNO Ledger" style="width:44px;height:44px"><h1>UNO Ledger</h1><p>Almost there…</p></div>
+        <div class="card" style="margin-top:4px">
+          <h3 style="margin:0 0 8px">⏳ Waiting for approval</h3>
+          <p class="hint" style="margin:0">UNO Ledger is invite-only. You're signed in as <b id="pEmail"></b>, but an admin needs to approve your account before you can start. We've let them know — you'll be able to get in as soon as one of them approves you.</p>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn" id="pCheck">Check again</button>
+          <button class="btn ghost" id="pOut">Sign out</button>
+        </div>
+        <div id="pMsg" class="login-msg"></div>
+      </div>
+    </div>`;
+  const em = document.getElementById("pEmail"); if (em) em.textContent = user.email || "";
+  document.getElementById("pCheck").onclick = () => window.location.reload();
+  document.getElementById("pOut").onclick = () => signOut();
+}
+
 async function getClient() {
   if (supabase) return supabase;
   const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
@@ -108,6 +159,7 @@ class CloudStore {
     this.sb = client;
     this.state = { version: 1, you: { id: "you", name: "You", email: "" }, people: [], ledgers: [], expenses: [] };
     this.listeners = new Set();
+    this.isPlatformAdmin = false; // one of the three platform admins?
     // my member_ref can differ per ledger: it's my auth id in ledgers I created,
     // but a generated "pending" id in ledgers I was invited to. Track per ledger.
     this.myRefByLedger = {};
@@ -277,6 +329,38 @@ class CloudStore {
         return { ok: true };
       }
       return { ok: false, error: (data && data.error) || "Couldn't update admin." };
+    } catch (e) { return { ok: false, error: e.message || String(e) }; }
+  }
+
+  // ---- platform admin: approve / revoke new signups ----
+  // Fetches fresh from the DB each call, so once any admin approves someone the
+  // others see the current state (an approved person leaves the pending list).
+  async listUsersAdmin() {
+    const { data, error } = await this.sb.rpc("list_users_admin");
+    if (error) { console.error("[cloud] list users failed:", error.message); return []; }
+    return (data || []).map((u) => ({
+      id: u.id, email: u.email || "", username: u.username || null,
+      name: u.display_name || (u.email || "").split("@")[0] || "User",
+      approved: !!u.approved, createdAt: u.created_at,
+    }));
+  }
+  async setUserApproved(userId, approved, userEmail, userName) {
+    try {
+      const { data, error } = await this.sb.rpc("set_user_approved", { p_user: userId, p_approved: approved });
+      if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Couldn't update." };
+      if (approved && userEmail) {
+        this._try("approve email", () => this.sb.functions.invoke("notify-member", {
+          body: { type: "approval-granted", email: userEmail, name: userName || "", link: appUrl(), inviterName: "UNO Ledger" },
+        }));
+      }
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message || String(e) }; }
+  }
+  async rejectUser(userId) {
+    try {
+      const { data, error } = await this.sb.rpc("reject_user", { p_user: userId });
+      if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Couldn't reject." };
+      return { ok: true };
     } catch (e) { return { ok: false, error: e.message || String(e) }; }
   }
 
@@ -539,8 +623,24 @@ export async function startCloud() {
 
   myId = session.user.id;
   myEmail = session.user.email || "";
+  const youName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || (myEmail ? myEmail.split("@")[0] : "You");
+
+  // Invite-only gate: make sure a profile row exists, then check approval.
+  // Fail-open if approvals.sql isn't installed yet (so nothing breaks pre-migration).
+  await ensureOwnProfile(sb, youName);
+  const appr = await sb.rpc("am_i_approved");
+  const approved = appr.error ? true : (appr.data === true);
+  const adm = await sb.rpc("is_platform_admin");
+  const isAdmin = adm.data === true;
+  if (!approved) {
+    notifyAdminsOfSignup(sb, { id: myId, name: youName, email: myEmail }); // best-effort
+    pendingScreen({ email: myEmail });
+    return false;
+  }
+
   const store = new CloudStore(sb);
-  store.state.you.name = session.user.user_metadata?.full_name || session.user.user_metadata?.name || (myEmail ? myEmail.split("@")[0] : "You");
+  store.isPlatformAdmin = isAdmin;
+  store.state.you.name = youName;
   store.state.you.email = myEmail;
   setStore(store);
   await store.hydrate();
