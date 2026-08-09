@@ -424,11 +424,23 @@ class CloudStore {
     if (error) { console.error("[cloud] load messages failed:", error.message); return []; }
     return (data || []).map((m) => ({ id: m.id, chatId: m.chat_id, sender: m.sender, mine: m.sender === myId, body: m.body || "", deleted: !!m.deleted, editedAt: m.edited_at || null, attachments: m.attachments || null, mentions: m.mentions || null, at: m.created_at ? new Date(m.created_at).getTime() : 0 }));
   }
-  async sendMessage(chatId, body) {
-    const text = (body || "").trim(); if (!text) return { ok: false, error: "Empty message." };
-    const { data, error } = await this.sb.from("messages").insert({ chat_id: chatId, sender: myId, body: text }).select().single();
+  async sendMessage(chatId, body, attachments) {
+    const text = (body || "").trim();
+    const atts = (attachments && attachments.length) ? attachments : null;
+    if (!text && !atts) return { ok: false, error: "Empty message." };
+    const { error } = await this.sb.from("messages").insert({ chat_id: chatId, sender: myId, body: text || null, attachments: atts });
     if (error) return { ok: false, error: error.message };
-    return { ok: true, message: { id: data.id, sender: myId, mine: true, body: text, at: Date.now() } };
+    return { ok: true };
+  }
+  async uploadChatFile(file) {
+    try {
+      const ext = (file.name.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const path = `${myId}/${crypto.randomUUID()}${ext ? "." + ext : ""}`;
+      const { error } = await this.sb.storage.from("chat-uploads").upload(path, file, { upsert: false, contentType: file.type || undefined });
+      if (error) return { ok: false, error: error.message };
+      const { data } = this.sb.storage.from("chat-uploads").getPublicUrl(path);
+      return { ok: true, attachment: { url: data.publicUrl, name: file.name, type: file.type || "", size: file.size } };
+    } catch (e) { return { ok: false, error: e.message || String(e) }; }
   }
   async editMessage(messageId, body) {
     const text = (body || "").trim(); if (!text) return { ok: false, error: "Message can't be empty — delete it instead." };

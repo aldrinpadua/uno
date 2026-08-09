@@ -25,6 +25,7 @@ function onRealtime(evt) {
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const initials = (name) => (name || "?").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+const fmtBytes = (n) => { n = Number(n) || 0; if (n < 1024) return n + " B"; if (n < 1048576) return (n / 1024).toFixed(0) + " KB"; return (n / 1048576).toFixed(1) + " MB"; };
 // profile-thumbnail colors people can pick from
 const AVATAR_COLORS = ["#2f6fd6", "#8A2432", "#D8A32B", "#2ecc71", "#7b5cff", "#e0559b", "#0ea5a5", "#e67e22", "#6B7280", "#111827"];
 const avColor = (m) => (m && m.color) || "#2f6fd6";
@@ -367,7 +368,12 @@ async function renderChat(chatId) {
       <div style="display:flex;gap:8px">${c && c.isGroup ? `<button class="btn ghost sm" id="chatManage">Manage</button>` : ""}<button class="icon-btn" id="chatDelete" title="Delete conversation (only for you)">🗑️</button></div>
     </div>
     <div id="msgScroll" style="max-height:calc(100vh - 280px);overflow-y:auto;padding:4px 0"><div class="exp-meta" style="padding:10px 14px">Loading…</div></div>
-    <div class="row" style="margin-top:12px;position:sticky;bottom:0"><input id="msgInput" placeholder="Message…" autocomplete="off" style="flex:1"><button class="btn" id="msgSend" style="flex:none">Send</button></div>`;
+    <div class="row" style="margin-top:12px;position:sticky;bottom:0;flex-wrap:nowrap">
+      <input type="file" id="msgFile" hidden>
+      <button class="btn ghost" id="msgAttach" style="flex:none" title="Attach a photo or file">📎</button>
+      <input id="msgInput" placeholder="Message…" autocomplete="off" style="flex:1;min-width:0">
+      <button class="btn" id="msgSend" style="flex:none">Send</button>
+    </div>`;
   wireMobile();
   $("#backMsgs").onclick = () => { view = { type: "messages" }; render(); };
   if ($("#chatManage")) $("#chatManage").onclick = () => openManageChatModal(chatId);
@@ -384,9 +390,12 @@ async function renderChat(chatId) {
       const s = store.chatSender(chatId, m.sender);
       const time = new Date(m.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
       const who = m.mine || !c || !c.isGroup ? "" : `<div class="msg-who">${esc(s.name)}</div>`;
+      const atts = (m.attachments || []).map((a) => (a.type && a.type.startsWith("image/"))
+        ? `<a href="${esc(a.url)}" target="_blank" rel="noopener"><img src="${esc(a.url)}" class="msg-img" loading="lazy"></a>`
+        : `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="msg-file">📎 <span class="fn">${esc(a.name || "file")}</span>${a.size ? `<span class="fsz">${fmtBytes(a.size)}</span>` : ""}</a>`).join("");
       const inner = m.deleted
         ? `<div style="opacity:.6;font-style:italic">message deleted</div>`
-        : `<div>${esc(m.body)}</div><div class="msg-time">${time}${m.editedAt ? " · edited" : ""}</div>`;
+        : `${atts}${m.body ? `<div>${esc(m.body)}</div>` : ""}<div class="msg-time">${time}${m.editedAt ? " · edited" : ""}</div>`;
       const tap = (m.mine && !m.deleted) ? ` data-msg="${m.id}" style="cursor:pointer"` : "";
       return `<div class="msg-row ${m.mine ? "mine" : ""}">
         ${m.mine ? "" : `<div class="avatar sm" style="background:${avColor(s)}">${esc(initials(s.name))}</div>`}
@@ -418,6 +427,19 @@ async function renderChat(chatId) {
   };
   $("#msgSend").onclick = send;
   $("#msgInput").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
+  $("#msgAttach").onclick = () => $("#msgFile").click();
+  $("#msgFile").onchange = async () => {
+    const f = $("#msgFile").files[0]; if (!f) return;
+    $("#msgFile").value = "";
+    if (f.size > 15 * 1024 * 1024) return toast("File too large (max 15 MB).");
+    const att = $("#msgAttach"); att.disabled = true; toast("Uploading…");
+    const up = await store.uploadChatFile(f); att.disabled = false;
+    if (!up.ok) return toast(up.error || "Upload failed.");
+    const text = $("#msgInput").value.trim(); $("#msgInput").value = "";
+    const r = await store.sendMessage(chatId, text, [up.attachment]);
+    if (!r.ok) return toast(r.error || "Couldn't send.");
+    await reload(); store.loadChats();
+  };
   setTimeout(() => { const i = $("#msgInput"); if (i) i.focus(); }, 40);
 }
 
