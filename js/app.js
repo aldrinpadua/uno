@@ -345,7 +345,7 @@ function chatAvatar(c) {
   const bg = c.isGroup ? "#2f6fd6" : avColor(m);
   return `<div class="avatar" style="background:${bg}">${label}</div>`;
 }
-function renderMessages() {
+function renderMessages(skipRefresh) {
   const main = $("#main");
   const chats = store.state.chats || [];
   main.innerHTML = `${mobileBar()}
@@ -364,7 +364,16 @@ function renderMessages() {
       ${c.unread ? `<span class="nav-dot" style="margin-left:0">${c.unread}</span>` : ""}
     </div>`).join("");
   list.querySelectorAll("[data-chat]").forEach((el) => el.onclick = () => { view = { type: "chat", chatId: el.dataset.chat }; render(); });
-  if (store.loadChats) store.loadChats().then(() => { if (view.type === "messages") renderMessages(); });
+  // Refresh from the server ONCE per entry to this view, then re-render with the
+  // fresh list. skipRefresh=true on that second pass so we don't loop forever.
+  if (!skipRefresh && store.loadChats) {
+    const before = JSON.stringify((store.state.chats || []).map((c) => [c.id, c.lastAt, c.unread]));
+    store.loadChats().then(() => {
+      if (view.type !== "messages") return;
+      const after = JSON.stringify((store.state.chats || []).map((c) => [c.id, c.lastAt, c.unread]));
+      if (after !== before) renderMessages(true); // only repaint if something actually changed
+    });
+  }
 }
 
 async function renderChat(chatId) {
@@ -1747,7 +1756,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-09b · messaging: attachments + @mentions + email";
+const BUILD = "2026-08-09c · fix Messages-tab render loop (clicks now work)";
 async function boot() {
   console.log("%cUNO Ledger build:", "color:#D8A32B;font-weight:bold", BUILD);
   if (CONFIG.MODE === "cloud") {
