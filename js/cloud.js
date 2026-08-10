@@ -202,13 +202,14 @@ class CloudStore {
     // Load the profile if it exists (don't clobber a name/username the user set);
     // create it on very first login.
     await this._try("profile load", async () => {
-      const { data: prof } = await this.sb.from("profiles").select("display_name,email,username,friend_token,avatar_color").eq("id", myId).maybeSingle();
+      const { data: prof } = await this.sb.from("profiles").select("display_name,email,username,friend_token,avatar_color,timezone").eq("id", myId).maybeSingle();
       if (prof) {
         you.name = prof.display_name || you.name;
         you.email = (prof.email || myEmail || "").toLowerCase();
         you.username = prof.username || null;
         you.friendToken = prof.friend_token || null;
         you.color = prof.avatar_color || null;
+        you.timezone = prof.timezone || null;
       } else {
         await this.sb.from("profiles").insert({ id: myId, display_name: you.name, email: (myEmail || "").toLowerCase() });
         you.username = null;
@@ -660,6 +661,11 @@ class CloudStore {
     await this._try("avatar color", () => this.sb.from("profiles").update({ avatar_color: color || null }).eq("id", myId));
     return { ok: true };
   }
+  async setTimezone(tz) {
+    this.state.you.timezone = tz || null; this._notify();
+    await this._try("timezone", () => this.sb.from("profiles").update({ timezone: tz || null }).eq("id", myId));
+    return { ok: true };
+  }
   // Start a verified email change: Supabase emails a confirmation link to the new
   // address (and, if "Secure email change" is on, the current one too). The login
   // email only changes once they click it; the app syncs profiles/member copies
@@ -1021,11 +1027,17 @@ class CloudStore {
       }
     });
   }
-  removeLedger(id) {
+  // Definitive delete via RPC: succeeds for the owner, the original founder, an
+  // admin of an ownerless group, or any dead (no-active-member) group. On failure
+  // we re-hydrate so a blocked delete can't leave a "ghost" removed from the UI
+  // but alive in the DB (which is what made deleted groups reappear).
+  async removeLedger(id) {
+    const { data, error } = await this.sb.rpc("delete_ledger", { p_ledger: id });
+    if (error || !(data && data.ok)) { await this.hydrate(); return { ok: false, error: (data && data.error) || error?.message || "Couldn't delete." }; }
     this.state.ledgers = this.state.ledgers.filter((l) => l.id !== id && l.parentId !== id);
     this.state.expenses = this.state.expenses.filter((e) => e.ledgerId !== id);
     this._notify();
-    this._try("ledger delete", () => this.sb.from("ledgers").delete().eq("id", id)); // cascades members + expenses
+    return { ok: true };
   }
 
   // Save a trip's details (creator/admins only — enforced server-side by set_trip_details).
