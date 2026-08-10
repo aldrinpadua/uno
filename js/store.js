@@ -80,10 +80,16 @@ class LocalStore {
     this.state.ledgers = this.state.ledgers.filter((l) => l.id !== id && l.parentId !== id);
     this.state.expenses = this.state.expenses.filter((e) => e.ledgerId !== id);
     this._persist();
+    return { ok: true };
   }
   async setTripDetails(id, details) {
     const l = this.ledgerById(id);
     if (l) { l.tripDetails = details; this._persist(); }
+    return { ok: true };
+  }
+  async setTimezone(tz) {
+    if (this.state.you) this.state.you.timezone = tz || null;
+    this._persist();
     return { ok: true };
   }
 
