@@ -50,7 +50,12 @@ function renderMsgBody(text, mentions) {
   return html;
 }
 // profile-thumbnail colors people can pick from
-const AVATAR_COLORS = ["#2f6fd6", "#8A2432", "#D8A32B", "#2ecc71", "#7b5cff", "#e0559b", "#0ea5a5", "#e67e22", "#6B7280", "#111827"];
+const AVATAR_COLORS = [
+  "#2f6fd6", "#3b82f6", "#0ea5a5", "#14b8a6", "#22c55e", "#2ecc71", "#84cc16",
+  "#eab308", "#D8A32B", "#e67e22", "#f97316", "#ef4444", "#8A2432", "#e11d48",
+  "#e0559b", "#d946ef", "#a855f7", "#7b5cff", "#6366f1", "#0891b2", "#64748b",
+  "#6B7280", "#475569", "#111827",
+];
 const avColor = (m) => (m && m.color) || "#2f6fd6";
 const avatarEl = (m, { cls = "", attrs = "" } = {}) => `<div class="avatar ${cls}" style="background:${avColor(m)}"${attrs ? " " + attrs : ""}>${esc(initials(m?.name))}</div>`;
 const kindLabel = { group: "Group", trip: "Trip", individual: "Friend" };
@@ -182,23 +187,35 @@ function renderSidebar() {
 
   const groups = store.ledgers().filter((l) => l.kind === "group");
   const trips = store.ledgers().filter((l) => l.kind === "trip");
-  fillList("#groupList", groups);
-  fillList("#tripList", trips);
+  fillList("#groupList", groups, "group");
+  fillList("#tripList", trips, "trip");
 
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view.type || (view.type === "friend" && b.dataset.view === "friends")));
   updateInboxBadge();
 }
 
-function fillList(sel, ledgers) {
+// How many of each sidebar list are shown before "Show more" (keeps the nav tidy).
+const LIST_CAP = 5;
+const listExpanded = { group: false, trip: false };
+function fillList(sel, ledgers, key) {
   const el = $(sel);
   if (!ledgers.length) { el.innerHTML = `<div class="empty">none yet</div>`; return; }
-  el.innerHTML = ledgers.map((l) => {
+  const expanded = !!listExpanded[key];
+  const shown = expanded ? ledgers : ledgers.slice(0, LIST_CAP);
+  const rowHtml = shown.map((l) => {
     const { base } = computeBalances(rolledExpenses(l), l.baseCurrency);
     const n = base.get("you") || 0;
     const badge = n === 0 ? "" : `<span class="badge ${n > 0 ? "owed" : "owe"}">${n > 0 ? "+" : ""}${formatMoney(n, l.baseCurrency)}</span>`;
-    return `<button data-ledger="${l.id}" class="${view.ledgerId === l.id ? "active" : ""}">${kindIcon[l.kind]} <span>${esc(ledgerDisplayName(l))}</span>${badge}</button>`;
+    // No per-item kind emoji — the section header carries the icon. Keeps the list clean.
+    return `<button data-ledger="${l.id}" class="${view.ledgerId === l.id ? "active" : ""}"><span>${esc(ledgerDisplayName(l))}</span>${badge}</button>`;
   }).join("");
+  const more = ledgers.length > LIST_CAP
+    ? `<button class="list-more" data-more="${key}">${expanded ? "▲ Show less" : `▾ Show ${ledgers.length - LIST_CAP} more`}</button>`
+    : "";
+  el.innerHTML = rowHtml + more;
   el.querySelectorAll("[data-ledger]").forEach((b) => b.onclick = () => { view = { type: "ledger", ledgerId: b.dataset.ledger, tab: landTab(b.dataset.ledger) }; setSidebar(false); render(); });
+  const moreBtn = el.querySelector("[data-more]");
+  if (moreBtn) moreBtn.onclick = () => { listExpanded[key] = !listExpanded[key]; renderSidebar(); };
 }
 
 // ---------- dashboard ----------
@@ -1480,11 +1497,12 @@ function renderMembers(body, l) {
     // quick add-friend for a co-member who isn't your friend yet
     const friendBtn = (CLOUD && id !== "you" && m && m.userId && !store.isFriend(m.userId)) ? `<button class="btn ghost sm" data-friendadd="${m.userId}" data-fname="${esc(m.name)}" title="Send friend request">＋ Friend</button>` : "";
     const dmBtn = (CLOUD && id !== "you" && m && m.userId) ? `<button class="icon-btn" data-dm="${m.userId}" title="Message">💬</button>` : "";
-    return `<div class="bal-row">
+    const removeBtn = (id === "you" || !admin) ? "" : `<button class="icon-btn" data-remove="${id}" title="Remove from ${esc(ledgerDisplayName(l))}">✖</button>`;
+    const actions = `${dmBtn}${friendBtn}${toggleBtn}${removeBtn}`;
+    return `<div class="bal-row member-row">
       ${avatarEl(m, { cls: "clk", attrs: `data-profile="${id}"` })}
-      <div class="grow" data-profile="${id}" style="cursor:pointer"><b>${esc(m?.name)}</b>${id === "you" ? " (you)" : ""}${adminBadge}${handle} ${meta}${pending ? ` <span class="tag" style="color:var(--amber)">invited · not signed up yet</span>` : ""}</div>
-      ${dmBtn}${friendBtn}${toggleBtn}
-      ${(id === "you" || !admin) ? "" : `<button class="icon-btn" data-remove="${id}" title="Remove from ${esc(ledgerDisplayName(l))}">✖</button>`}
+      <div class="grow" data-profile="${id}" style="cursor:pointer;min-width:0"><b>${esc(m?.name)}</b>${id === "you" ? " (you)" : ""}${adminBadge}${handle} ${meta}${pending ? ` <span class="tag" style="color:var(--amber)">invited · not signed up yet</span>` : ""}</div>
+      ${actions ? `<div class="member-actions">${actions}</div>` : ""}
     </div>`;
   }).join("");
   const inheritNote = parentG ? `<div class="hint" style="margin:0 0 10px">👑 Admins of the group “${esc(parentG.name)}” can also manage this trip while it's tagged to it.</div>` : "";
@@ -2159,17 +2177,28 @@ function openPersonModal(id) {
     ${showUser ? `<label>Thumbnail color</label>
       <div style="display:flex;align-items:center;gap:12px">
         <div class="avatar" id="avPreview" style="background:${avColor(store.state.you)}">${esc(initials(store.state.you.name))}</div>
-        <div class="chips" id="avSwatches">${AVATAR_COLORS.map((c) => `<span class="av-swatch${(store.state.you.color || "#2f6fd6") === c ? " on" : ""}" data-color="${c}" style="background:${c}"></span>`).join("")}</div>
-      </div>` : ""}
+        <div class="chips" id="avSwatches">${AVATAR_COLORS.map((c) => `<span class="av-swatch${(store.state.you.color || "#2f6fd6").toLowerCase() === c.toLowerCase() ? " on" : ""}" data-color="${c}" style="background:${c}"></span>`).join("")}
+          <label class="av-swatch av-custom" title="Custom color" style="background:conic-gradient(from 0deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00);position:relative;overflow:hidden">
+            <input type="color" id="avCustom" value="${esc((store.state.you.color || "#2f6fd6"))}" style="position:absolute;inset:-4px;opacity:0;cursor:pointer;width:200%;height:200%">
+          </label>
+        </div>
+      </div>
+      <div class="hint" style="margin-top:6px">Pick a preset or tap the rainbow swatch for any custom color.</div>` : ""}
   `, `<button class="btn ghost" data-close>Cancel</button><button class="btn" id="pSave">Save</button>`);
   if (showUser && $("#pUserBtn")) $("#pUserBtn").onclick = () => { closeModal(); openUsernameModal(false); };
   if ($("#pChangeEmail")) $("#pChangeEmail").onclick = () => { closeModal(); openChangeEmailModal(); };
   let pickedColor = store.state.you.color || null;
+  const markSwatch = (color) => $("#avSwatches").querySelectorAll("[data-color]").forEach((x) => x.classList.toggle("on", x.dataset.color.toLowerCase() === (color || "").toLowerCase()));
   if (showUser) $("#avSwatches").querySelectorAll("[data-color]").forEach((s) => s.onclick = () => {
     pickedColor = s.dataset.color;
-    $("#avSwatches").querySelectorAll("[data-color]").forEach((x) => x.classList.toggle("on", x === s));
+    markSwatch(pickedColor);
     const pv = $("#avPreview"); if (pv) pv.style.background = pickedColor;
   });
+  if (showUser && $("#avCustom")) $("#avCustom").oninput = (e) => {
+    pickedColor = e.target.value;
+    markSwatch(pickedColor); // clears preset highlight when the color isn't one of them
+    const pv = $("#avPreview"); if (pv) pv.style.background = pickedColor;
+  };
   $("#pSave").onclick = async () => {
     const patch = { name: $("#pName").value.trim() || m.name };
     if ($("#pEmail")) patch.email = $("#pEmail").value.trim(); // own email is read-only (changed via the verified flow)
@@ -2520,7 +2549,20 @@ function openBackup() {
 function emptyState(icon, title, sub, extra = "") {
   return `<div class="empty-state"><div class="big">${icon}</div><h3 style="margin:0 0 6px;color:var(--text)">${esc(title)}</h3><p style="max-width:440px;margin:0 auto">${esc(sub)}</p>${extra}</div>`;
 }
-function mobileBar() { return `<div class="mobile-bar"><button class="hamburger" id="hamburger">☰ Menu</button><b id="brandHome" style="cursor:pointer">UNO</b></div>`; }
+// Everything that lights up a red dot in the (hidden-on-mobile) sidebar, summed —
+// so the burger itself shows a badge and people notice without opening the menu.
+function totalPending() {
+  if (!CLOUD) return 0;
+  return (store.pendingCount ? store.pendingCount() : 0)
+    + (store.isPlatformAdmin && store.pendingApprovalCount ? store.pendingApprovalCount() : 0)
+    + (store.messagesUnread ? store.messagesUnread() : 0)
+    + (store.pollsPending ? store.pollsPending() : 0);
+}
+function mobileBar() {
+  const n = totalPending();
+  const dot = n > 0 ? `<span class="nav-dot burger-dot">${n}</span>` : "";
+  return `<div class="mobile-bar"><button class="hamburger" id="hamburger">☰ Menu${dot}</button><b id="brandHome" style="cursor:pointer">UNO</b></div>`;
+}
 function setSidebar(open) {
   const sb = $("#sidebar"); if (sb) sb.classList.toggle("open", open);
   const bd = $("#backdrop"); if (bd) bd.hidden = !open;
@@ -2703,7 +2745,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11o · \"Payment Reminders\" tab rename + \"Trip reminders\" wording + per-minute trip reminder cron (tight reminders fire)";
+const BUILD = "2026-08-11p · friend avatar colors + custom color picker + bigger palette · tidy sidebar (icons on headers, 5+expand) · mobile members fix · burger badge";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
