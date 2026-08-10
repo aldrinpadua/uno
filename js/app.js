@@ -1350,7 +1350,7 @@ function renderFriendDetail(friendId) {
     <div class="page-head">
       <div style="max-width:100%">
         <button class="link-btn" id="backFriends" style="padding-left:0">← Friends</button>
-        <h1 class="page-title">${kindIcon.individual} ${esc(m.name)}</h1>
+        <h1 class="page-title" style="margin-top:8px">${kindIcon.individual} ${esc(m.name)}</h1>
         <p class="page-sub">${m.username ? "@" + esc(m.username) + " · " : ""}${m.email ? esc(m.email) : "no email"}${CLOUD && !m.userId && m.email ? " · <span style='color:var(--amber)'>invited, pending</span>" : ""}${inactive ? " · <span style='color:var(--red)'>unavailable</span>" : ""}</p>
       </div>
       <div style="display:flex;gap:8px">${CLOUD && m.userId && !inactive ? `<button class="btn ghost" id="dmFriend">💬 Message</button>` : ""}<button class="btn" id="addFriendExp">＋ Add expense</button></div>
@@ -1485,7 +1485,7 @@ function renderLedger() {
     <div class="page-head">
       <div style="max-width:100%">
         ${view.from ? `<button class="link-btn" id="ledgerBack" style="padding-left:0">← ${esc(fromLabel(view.from))}</button>` : ""}
-        <h1 class="page-title">${kindIcon[l.kind]} ${esc(ledgerDisplayName(l))}</h1>
+        <h1 class="page-title"${view.from ? ' style="margin-top:8px"' : ""}>${kindIcon[l.kind]} ${esc(ledgerDisplayName(l))}</h1>
         <p class="page-sub">${kindLabel[l.kind]}${parent ? " in " + esc(parent.name) : ""} · base currency ${l.baseCurrency} · ${rolledMemberIds(l).length} people${l.kind === "group" && nKids ? ` · includes ${nKids} trip${nKids === 1 ? "" : "s"}` : ""}</p>
       </div>
       <button class="btn" id="addExp">＋ Add expense</button>
@@ -3066,7 +3066,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-12a · back button on ledgers opened from a friend profile or the dashboard";
+const BUILD = "2026-08-12b · back-button spacing matches Messages (8px above title)";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
