@@ -395,18 +395,18 @@ async function renderChat(chatId) {
   main.innerHTML = `${mobileBar()}
     <div class="page-head">
       <div style="max-width:100%"><button class="link-btn" id="backMsgs" style="padding-left:0">← Messages</button>
-        <h1 class="page-title" style="font-size:20px">${c && c.isGroup ? "👥 " : ""}${esc(title)}</h1>
+        <h1 class="page-title" style="font-size:20px;margin-top:8px">${c && c.isGroup ? "👥 " : ""}${esc(title)}</h1>
         ${c && c.isGroup ? `<p class="page-sub">${(c.members || []).map((m) => esc(m.name)).join(", ")}${c.members && c.members.length ? " · you" : ""}</p>` : ""}</div>
       <div style="display:flex;gap:8px">${c && c.isGroup ? `<button class="btn ghost sm" id="chatManage">Manage</button>` : ""}<button class="icon-btn" id="chatDelete" title="Delete conversation (only for you)">🗑️</button></div>
     </div>
     <div id="msgScroll" style="max-height:calc(100vh - 280px);overflow-y:auto;padding:4px 0"><div class="exp-meta" style="padding:10px 14px">Loading…</div></div>
-    <div style="position:relative;margin-top:12px">
+    <div class="composer-wrap">
       <div id="mentionMenu" class="mention-menu" hidden></div>
-      <div class="row" style="position:sticky;bottom:0;flex-wrap:nowrap">
+      <div class="composer">
         <input type="file" id="msgFile" hidden>
-        <button class="btn ghost" id="msgAttach" style="flex:none" title="Attach a photo or file">📎</button>
-        <input id="msgInput" placeholder="Message… (type @ to mention)" autocomplete="off" style="flex:1;min-width:0">
-        <button class="btn" id="msgSend" style="flex:none">Send</button>
+        <button class="btn ghost composer-attach" id="msgAttach" title="Attach a photo or file">📎</button>
+        <input id="msgInput" class="composer-input" placeholder="Message…  (@ to mention)" autocomplete="off">
+        <button class="btn composer-send" id="msgSend">Send</button>
       </div>
     </div>`;
   wireMobile();
@@ -1641,7 +1641,7 @@ function openBackup() {
 function emptyState(icon, title, sub, extra = "") {
   return `<div class="empty-state"><div class="big">${icon}</div><h3 style="margin:0 0 6px;color:var(--text)">${esc(title)}</h3><p style="max-width:440px;margin:0 auto">${esc(sub)}</p>${extra}</div>`;
 }
-function mobileBar() { return `<div class="mobile-bar"><button class="hamburger" id="hamburger">☰ Menu</button><b>UNO Ledger</b></div>`; }
+function mobileBar() { return `<div class="mobile-bar"><button class="hamburger" id="hamburger">☰ Menu</button><b id="brandHome" style="cursor:pointer">UNO Ledger</b></div>`; }
 function setSidebar(open) {
   const sb = $("#sidebar"); if (sb) sb.classList.toggle("open", open);
   const bd = $("#backdrop"); if (bd) bd.hidden = !open;
@@ -1649,6 +1649,7 @@ function setSidebar(open) {
 function wireMobile() {
   const h = $("#hamburger"); if (h) h.onclick = () => setSidebar(!$("#sidebar").classList.contains("open"));
   const bd = $("#backdrop"); if (bd) bd.onclick = () => setSidebar(false);
+  const bh = $("#brandHome"); if (bh) bh.onclick = () => { view = { type: "dashboard" }; setSidebar(false); render(); };
 }
 
 // ---------- boot ----------
@@ -1768,7 +1769,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-10 · fix realtime repaint storm on Messages list (group chats)";
+const BUILD = "2026-08-10b · header→dashboard, mobile composer + chat-header spacing";
 async function boot() {
   console.log("%cUNO Ledger build:", "color:#D8A32B;font-weight:bold", BUILD);
   if (CONFIG.MODE === "cloud") {
