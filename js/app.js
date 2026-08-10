@@ -2854,7 +2854,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11t · stronger \"Groups\"/\"Trips\" sidebar headers + favorites/pins/sidebar tidy";
+const BUILD = "2026-08-11u · bolder \"Groups\"/\"Trips\" headers (divider + accent + 14px) that stand out";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
