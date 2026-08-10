@@ -15,10 +15,22 @@ const CLOUD = CONFIG.MODE === "cloud"; // cloud mode = accounts; add people by e
 
 let view = { type: "dashboard", ledgerId: null, tab: "expenses" };
 let _chatHook = null; // set by renderChat so realtime can live-update the open thread
+// Coalesce realtime-driven repaints of the Messages list to one per frame. The
+// store has already updated the in-memory chats by the time we're called, so we
+// repaint from state (skipRefresh=true) instead of re-fetching on every event —
+// otherwise a busy group chat triggers a my_chats round-trip + full rebuild per
+// message for every member, which freezes the tab (esp. on mobile).
+let _msgsRepaintQueued = false;
+function repaintMessagesSoon() {
+  if (_msgsRepaintQueued) return;
+  _msgsRepaintQueued = true;
+  const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (fn) => setTimeout(fn, 16);
+  raf(() => { _msgsRepaintQueued = false; if (view.type === "messages") renderMessages(true); });
+}
 function onRealtime(evt) {
   updateInboxBadge();
   if (view.type === "chat") { if (_chatHook) _chatHook(evt); }
-  else if (view.type === "messages") renderMessages();
+  else if (view.type === "messages") repaintMessagesSoon();
 }
 
 // ---------- helpers ----------
@@ -1756,7 +1768,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-09c · fix Messages-tab render loop (clicks now work)";
+const BUILD = "2026-08-10 · fix realtime repaint storm on Messages list (group chats)";
 async function boot() {
   console.log("%cUNO Ledger build:", "color:#D8A32B;font-weight:bold", BUILD);
   if (CONFIG.MODE === "cloud") {
