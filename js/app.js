@@ -679,6 +679,12 @@ function optionMain(kind, o) {
   if (!o.start_at || !o.end_at) return "(incomplete)";
   return kind === "dates" ? `${fmtDay(o.start_at)} – ${fmtDay(o.end_at)}` : `${fmtDayTime(o.start_at)} – ${fmtDayTime(o.end_at)}`;
 }
+// Let poll creators type a bare domain (youtube.com) — prepend https:// if missing.
+function normalizeUrl(u) {
+  u = (u || "").trim();
+  if (!u) return "";
+  return /^https?:\/\//i.test(u) ? u : "https://" + u;
+}
 // Deadline from a date input + a time input; time defaults to 11:59 PM.
 function deadlineFromInputs(dateVal, timeVal) {
   if (!dateVal) return null;
@@ -780,7 +786,7 @@ function openNewPollModal() {
       return `<div class="poll-opt">
         <div class="poll-opt-main">${mainField}${summary}</div>
         ${o.image_url ? `<div class="poll-opt-img"><img src="${esc(o.image_url)}"><button type="button" class="link-btn" data-imgdel="${i}">remove image</button></div>` : ""}
-        ${(linkOpen.has(i) || o.ref_url) ? `<input data-idx="${i}" data-f="ref_url" placeholder="https://reference-link.com" value="${esc(o.ref_url)}" style="margin-top:6px">` : ""}
+        ${(linkOpen.has(i) || o.ref_url) ? `<input data-idx="${i}" data-f="ref_url" placeholder="youtube.com  (link — https:// added automatically)" value="${esc(o.ref_url)}" style="margin-top:6px">` : ""}
         <div class="poll-opt-tools">
           <button type="button" class="btn ghost sm" data-link="${i}">🔗 Link</button>
           <button type="button" class="btn ghost sm" data-img="${i}">🖼️ Image</button>
@@ -820,13 +826,13 @@ function openNewPollModal() {
     // validate + build options
     const built = [];
     for (const o of options) {
-      if (kind === "text") { if (o.label.trim()) built.push({ label: o.label.trim(), ref_url: o.ref_url, image_url: o.image_url, all_day: false }); }
+      if (kind === "text") { if (o.label.trim()) built.push({ label: o.label.trim(), ref_url: normalizeUrl(o.ref_url), image_url: o.image_url, all_day: false }); }
       else {
         if (!o.start || !o.end) continue;
         const startISO = kind === "dates" ? new Date(o.start + "T00:00:00").toISOString() : new Date(o.start).toISOString();
         const endISO = kind === "dates" ? new Date(o.end + "T00:00:00").toISOString() : new Date(o.end).toISOString();
         if (new Date(endISO) < new Date(startISO)) return toast("An option's end is before its start.");
-        built.push({ start_at: startISO, end_at: endISO, all_day: kind === "dates", ref_url: o.ref_url, image_url: o.image_url });
+        built.push({ start_at: startISO, end_at: endISO, all_day: kind === "dates", ref_url: normalizeUrl(o.ref_url), image_url: o.image_url });
       }
     }
     if (built.length < 2) return toast("Add at least two complete options.");
@@ -953,7 +959,7 @@ function openAddPollOption(d, reload) {
          <div class="poll-range"><input type="${kind === "dates" ? "date" : "datetime-local"}" id="aoStart"><span>→</span><input type="${kind === "dates" ? "date" : "datetime-local"}" id="aoEnd"></div>`}
     <div id="aoImgWrap" style="margin-top:8px"></div>
     <input type="file" id="aoFile" accept="image/*" hidden>
-    <input id="aoRef" placeholder="https://reference-link.com (optional)" style="margin-top:8px">
+    <input id="aoRef" placeholder="youtube.com  (optional link — https:// added)" style="margin-top:8px">
     <div class="row" style="margin-top:8px"><button class="btn ghost sm" id="aoImg">🖼️ Add image</button></div>
   `, `<button class="btn ghost" data-close>Cancel</button><button class="btn" id="aoSave">Add</button>`);
   $("#aoImg").onclick = () => $("#aoFile").click();
@@ -965,7 +971,7 @@ function openAddPollOption(d, reload) {
     image_url = up.url; $("#aoImgWrap").innerHTML = `<img class="poll-img" src="${esc(image_url)}">`;
   };
   $("#aoSave").onclick = async () => {
-    const opt = { ref_url: $("#aoRef").value.trim(), image_url, all_day: kind === "dates" };
+    const opt = { ref_url: normalizeUrl($("#aoRef").value), image_url, all_day: kind === "dates" };
     if (kind === "text") { const l = $("#aoLabel").value.trim(); if (!l) return toast("Enter your option."); opt.label = l; }
     else {
       const sv = $("#aoStart").value, ev = $("#aoEnd").value;
@@ -2124,6 +2130,15 @@ document.getElementById("sidebar").addEventListener("click", (e) => {
   if (e.target.closest(".nav-item, [data-ledger]")) setTimeout(tabRefresh, 0);
 });
 
+// Open the native date/time picker on click (Chrome only opens it via the tiny
+// icon otherwise; Safari opens on click already). showPicker() needs a user gesture.
+document.addEventListener("click", (e) => {
+  const el = e.target;
+  if (el && el.tagName === "INPUT" && ["date", "time", "datetime-local"].includes(el.type) && typeof el.showPicker === "function") {
+    try { el.showPicker(); } catch (_) {}
+  }
+});
+
 function openPeopleModal() {
   const people = store.state.people;
   modal("People", `
@@ -2228,7 +2243,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11d · Polls v2 + poll invites in Invitations + refresh data on tab change";
+const BUILD = "2026-08-11e · date picker opens on click (Chrome) + auto-https on link fields";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
