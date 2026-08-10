@@ -1194,9 +1194,11 @@ function renderLedger() {
   // Friend (1:1) ledgers don't need a Members tab — it's just the two of you.
   const tabs = l.kind === "individual"
     ? ["expenses", "balances", "settle", "reminders", "settings"]
-    : ["expenses", "balances", "settle", "reminders", "members", "settings"];
+    : l.kind === "group"
+      ? ["expenses", "balances", "settle", "reminders", "members", "trips", "settings"]
+      : ["expenses", "balances", "settle", "reminders", "members", "settings"];
   if (!tabs.includes(view.tab)) view.tab = "expenses";
-  const tabLabel = { expenses: "Expenses", balances: "Balances", settle: "Settle up", reminders: "Reminders", members: "Members", settings: "Settings" };
+  const tabLabel = { expenses: "Expenses", balances: "Balances", settle: "Settle up", reminders: "Reminders", members: "Members", trips: "Trips", settings: "Settings" };
   const parent = l.parentId ? store.ledgerById(l.parentId) : null;
   const nKids = childrenOf(l).length;
 
@@ -1221,6 +1223,7 @@ function renderLedger() {
   else if (view.tab === "settle") renderSettle(body, l);
   else if (view.tab === "reminders") renderReminders(body, l);
   else if (view.tab === "members") renderMembers(body, l);
+  else if (view.tab === "trips") renderGroupTrips(body, l);
   else if (view.tab === "settings") renderSettings(body, l);
   wireMobile();
 }
@@ -1576,6 +1579,44 @@ function openInvite(l, res) {
   $("#copyInv").onclick = async () => { try { await navigator.clipboard.writeText(msg); toast("Invite copied — you can also send it directly."); } catch { toast("Copy failed — select the text and copy it."); } };
 }
 
+// A group's Trips tab: trips tagged to it (via parentId). Tagging/untagging just
+// sets the trip's parent — so they appear/disappear here automatically.
+function renderGroupTrips(body, l) {
+  const admin = !CLOUD || iAmAdminOf(l);
+  const trips = childrenOf(l).filter((x) => x.kind === "trip");
+  const standalone = store.ledgers().filter((x) => x.kind === "trip" && !x.parentId && (!CLOUD || iAmAdminOf(x)));
+  const rows = trips.length ? trips.map((t) => {
+    const count = rolledExpenses(t).filter((e) => !e.settlement).length;
+    return `<div class="exp-row" data-triprow="${t.id}" style="cursor:pointer">
+      <div class="exp-cat">${kindIcon.trip}</div>
+      <div class="exp-main"><div class="exp-desc">${esc(t.name)}</div>
+        <div class="exp-meta">Trip · ${rolledMemberIds(t).length} people · ${count} expense${count === 1 ? "" : "s"} · ${t.baseCurrency}</div></div>
+      ${admin ? `<button class="icon-btn" data-untag="${t.id}" title="Remove from ${esc(l.name)}">✖</button>` : ""}
+    </div>`;
+  }).join("") : `<div class="exp-meta" style="padding:10px 14px">No trips tagged to this group yet.</div>`;
+  body.innerHTML = `
+    <div class="card" style="padding:6px 0">${rows}</div>
+    ${admin ? `<div class="card" style="margin-top:14px">
+      <button class="btn" id="newTripHere">＋ New trip in ${esc(l.name)}</button>
+      ${standalone.length ? `<label style="margin-top:14px">Or tag an existing standalone trip</label>
+        <div class="row"><select id="tagTrip">${standalone.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select><button class="btn ghost" id="tagTripBtn" style="flex:none">Tag</button></div>` : ""}
+      <div class="hint" style="margin-top:8px">Tagging a trip shares this group's members/admins with it. Removing it here just makes it standalone — it isn't deleted.</div>
+    </div>` : ""}`;
+  body.querySelectorAll("[data-triprow]").forEach((el) => el.onclick = (e) => {
+    if (e.target.closest("[data-untag]")) return;
+    view = { type: "ledger", ledgerId: el.dataset.triprow, tab: "expenses" }; render();
+  });
+  body.querySelectorAll("[data-untag]").forEach((b) => b.onclick = (e) => {
+    e.stopPropagation();
+    const t = store.ledgerById(b.dataset.untag);
+    confirmChoice(`Remove "${t ? t.name : "this trip"}" from ${l.name}? It becomes a standalone trip (not deleted).`, "Remove", "Cancel", (yes) => {
+      if (!yes) return; store.updateLedger(b.dataset.untag, { parentId: null }); render(); toast("Removed from group.");
+    });
+  });
+  if ($("#newTripHere")) $("#newTripHere").onclick = () => openLedgerModal("trip", l.id);
+  if ($("#tagTripBtn")) $("#tagTripBtn").onclick = () => { const tid = $("#tagTrip").value; if (!tid) return; store.updateLedger(tid, { parentId: l.id }); render(); toast("Trip tagged to group."); };
+}
+
 function renderSettings(body, l) {
   const admin = !CLOUD || iAmAdminOf(l);
   const settingsCard = admin ? `
@@ -1588,10 +1629,11 @@ function renderSettings(body, l) {
         <select id="lParent"><option value="">— standalone —</option>${store.ledgers().filter((g) => g.kind === "group").map((g) => `<option value="${g.id}" ${l.parentId === g.id ? "selected" : ""}>${esc(g.name)}</option>`).join("")}</select>` : ""}
       <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn" id="lSave">Save</button>
-        <button class="btn danger" id="lDel">Delete ${kindLabel[l.kind].toLowerCase()}</button>
+        ${(l.iAmOwner || (!l.createdBy && admin)) ? `<button class="btn danger" id="lDel">Delete ${kindLabel[l.kind].toLowerCase()}</button>` : ""}
       </div>
+      ${(!l.iAmOwner && l.createdBy) ? `<div class="hint" style="margin-top:8px">Only the owner can delete this ${kindLabel[l.kind].toLowerCase()}.</div>` : ""}
     </div>`
-    : `<div class="card"><div class="exp-meta">👀 Only an admin can rename, change, or delete this ${kindLabel[l.kind].toLowerCase()}. You can still export below.</div></div>`;
+    : `<div class="card"><div class="exp-meta">👀 Only an admin can rename or change this ${kindLabel[l.kind].toLowerCase()} (and only the owner can delete it). You can still export below.</div></div>`;
   body.innerHTML = `
     ${settingsCard}
     <div class="card" style="margin-top:14px">
@@ -1704,7 +1746,7 @@ function confirmChoice(message, yesLabel, noLabel, cb) {
   $("#ccNo").onclick = () => { closeModal(); cb(false); };
 }
 
-function openLedgerModal(kind) {
+function openLedgerModal(kind, presetParent) {
   const people = store.state.people;
   const cloudFriend = CLOUD && kind === "individual";
   const nameLabel = kind === "individual" ? (CLOUD ? "Friend's email or @username" : "Friend's name") : "Name";
@@ -1714,7 +1756,7 @@ function openLedgerModal(kind) {
     <input id="mName" ${cloudFriend ? 'autocapitalize="off" spellcheck="false"' : ""} placeholder="${namePlaceholder}">
     <label>Base currency</label>
     <select id="mCur">${Object.keys(CURRENCIES).map((c) => `<option value="${c}">${c} — ${CURRENCIES[c].name}</option>`).join("")}</select>
-    ${kind === "trip" ? `<label>Part of a group? (optional)</label><select id="mParent"><option value="">— standalone —</option>${store.ledgers().filter((g) => g.kind === "group").map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select>` : ""}
+    ${kind === "trip" ? `<label>Part of a group? (optional)</label><select id="mParent"><option value="">— standalone —</option>${store.ledgers().filter((g) => g.kind === "group").map((g) => `<option value="${g.id}" ${presetParent === g.id ? "selected" : ""}>${esc(g.name)}</option>`).join("")}</select>` : ""}
     ${cloudFriend
       ? `<div class="hint" style="margin-top:14px">Existing members (by email or @username) are added instantly. A new email gets an invite automatically. A @username that doesn't exist can't be invited — use their email.</div>`
       : (CLOUD
@@ -2305,7 +2347,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11j · transfer ownership + reclaim ownership on rejoin";
+const BUILD = "2026-08-11k · group Trips tab (tag/untag) + delete is owner-only";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
