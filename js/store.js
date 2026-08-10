@@ -65,7 +65,7 @@ class LocalStore {
       id: uid(), kind, name: name.trim(), baseCurrency,
       memberIds: [...new Set(["you", ...memberIds])],
       parentId,
-      reminder: { enabled: false, frequency: "weekly", lastSentAt: null, message: "" },
+      reminder: { enabled: true, frequency: "weekly", lastSentAt: null, message: "" },
       createdAt: Date.now(),
     };
     this.state.ledgers.push(l);

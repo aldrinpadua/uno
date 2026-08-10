@@ -843,7 +843,7 @@ class CloudStore {
     return (data || []).map((u) => ({
       id: u.id, email: u.email || "", username: u.username || null,
       name: u.display_name || (u.email || "").split("@")[0] || "User",
-      approved: !!u.approved, createdAt: u.created_at,
+      approved: !!u.approved, createdAt: u.created_at, color: u.avatar_color || null,
     }));
   }
   async setUserApproved(userId, approved, userEmail, userName) {
@@ -1018,7 +1018,9 @@ class CloudStore {
   // ---- ledgers ----
   addLedger({ kind, name, baseCurrency = "USD", memberIds = [], parentId = null }) {
     const id = crypto.randomUUID();
-    const l = { id, kind, name: name.trim(), baseCurrency, memberIds: [...new Set(["you", ...memberIds])], parentId, reminder: { enabled: false, frequency: "weekly", lastSentAt: null, message: "" }, admins: [], createdBy: myId, iAmAdmin: true, iAmOwner: true, createdAt: Date.now() };
+    // Payment reminders default ON (weekly) for every new ledger — so nudges still
+    // go out to whoever owes, even if the creator never opens the reminders tab.
+    const l = { id, kind, name: name.trim(), baseCurrency, memberIds: [...new Set(["you", ...memberIds])], parentId, reminder: { enabled: true, frequency: "weekly", lastSentAt: null, message: "" }, admins: [], createdBy: myId, iAmAdmin: true, iAmOwner: true, createdAt: Date.now() };
     this.myRefByLedger[id] = myId; // I created it, so my ref here is my auth id
     this.state.ledgers.push(l); this._notify();
     // Track the create so member writes can wait for the ledger row to exist first

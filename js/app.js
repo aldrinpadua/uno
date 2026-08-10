@@ -354,6 +354,29 @@ const netToStr = (net, verbYou = "you owe ", verbThem = "owes you ") =>
     ? Object.entries(net).filter(([, v]) => v !== 0).map(([c, v]) => `<span class="${v >= 0 ? "pos" : "neg"}">${v > 0 ? verbThem : verbYou}${formatMoney(Math.abs(v), c)}</span>`).join(" · ")
     : `<span class="exp-meta">settled up</span>`;
 
+// A simple search box + live filter used by Friends / Messages / Polls. It hides
+// list rows whose text doesn't contain the query, and shows a "no matches" note.
+const searchBar = (id, ph) => `<input id="${id}" class="search-input" type="search" placeholder="${ph}" autocomplete="off" spellcheck="false">`;
+function wireSearch(inputId, listSel, itemSel) {
+  const inp = document.getElementById(inputId); if (!inp) return;
+  const run = () => {
+    const q = inp.value.trim().toLowerCase();
+    const list = document.querySelector(listSel); if (!list) return;
+    let any = false;
+    list.querySelectorAll(itemSel).forEach((el) => {
+      const m = !q || el.textContent.toLowerCase().includes(q);
+      el.style.display = m ? "" : "none";
+      if (m) any = true;
+    });
+    let note = list.querySelector(".search-empty");
+    if (!any && q) {
+      if (!note) { note = document.createElement("div"); note.className = "search-empty exp-meta"; note.style.padding = "12px 14px"; list.appendChild(note); }
+      note.textContent = `No matches for “${inp.value.trim()}”.`; note.style.display = "";
+    } else if (note) { note.style.display = "none"; }
+  };
+  inp.oninput = run;
+}
+
 function renderFriends() {
   const main = $("#main");
   const people = (CLOUD ? store.friends() : store.state.people).slice();
@@ -378,7 +401,8 @@ function renderFriends() {
       <div class="card stat"><div class="label">You owe</div><div class="value neg">${fmtSum(owe)}</div></div>
       <div class="card stat"><div class="label">Friends</div><div class="value">${people.length}</div></div>
     </div>
-    <div style="margin-top:20px" id="friendList"></div>`;
+    ${people.length ? searchBar("friendSearch", "Search friends by name or @username…") : ""}
+    <div style="margin-top:14px" id="friendList"></div>`;
   if ($("#addFriendBtn")) $("#addFriendBtn").onclick = () => openAddFriendModal();
   if ($("#myLinkBtn")) $("#myLinkBtn").onclick = () => copyLink(store.friendLink(), "Your friend invite link");
   main.querySelectorAll("[data-facc]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.acceptFriendRequest(+b.dataset.facc); if (r.ok) { toast("You're now friends."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
@@ -404,6 +428,7 @@ function renderFriends() {
     }).join("");
     list.querySelectorAll("[data-friend]").forEach((b) => b.onclick = () => { view = { type: "friend", friendId: b.dataset.friend }; render(); });
     list.querySelectorAll("[data-dm]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); openDm(b.dataset.dm); });
+    wireSearch("friendSearch", "#friendList", ".exp-row");
   }
   main.querySelectorAll("[data-new]").forEach((b) => b.onclick = () => openLedgerModal(b.dataset.new));
   wireMobile();
@@ -472,7 +497,8 @@ function renderMessages(skipRefresh) {
   main.innerHTML = `${mobileBar()}
     <div class="page-head"><div><h1 class="page-title">💬 Messages</h1><p class="page-sub">Chat with friends and the people in your groups.</p></div>
       <button class="btn" id="newChatBtn">＋ New chat</button></div>
-    <div style="margin-top:16px" id="chatList"></div>`;
+    ${chats.length ? searchBar("chatSearch", "Search chats by name…") : ""}
+    <div style="margin-top:14px" id="chatList"></div>`;
   wireMobile();
   $("#newChatBtn").onclick = () => openNewChatModal();
   const list = $("#chatList");
@@ -485,6 +511,7 @@ function renderMessages(skipRefresh) {
       ${c.unread ? `<span class="nav-dot" style="margin-left:0">${c.unread}</span>` : ""}
     </div>`).join("");
   list.querySelectorAll("[data-chat]").forEach((el) => el.onclick = () => { view = { type: "chat", chatId: el.dataset.chat }; render(); });
+  wireSearch("chatSearch", "#chatList", ".exp-row");
   // Refresh from the server ONCE per entry to this view, then re-render with the
   // fresh list. skipRefresh=true on that second pass so we don't loop forever.
   if (!skipRefresh && store.loadChats) {
@@ -946,7 +973,8 @@ function renderPolls(skipRefresh) {
   main.innerHTML = `${mobileBar()}
     <div class="page-head"><div><h1 class="page-title">📊 Polls</h1><p class="page-sub">Plan trips and decide together.</p></div>
       <button class="btn" id="newPollBtn">＋ New poll</button></div>
-    <div style="margin-top:16px" id="pollList"></div>`;
+    ${polls.length ? searchBar("pollSearch", "Search polls by title…") : ""}
+    <div style="margin-top:14px" id="pollList"></div>`;
   wireMobile();
   $("#newPollBtn").onclick = () => openNewPollModal();
   const list = $("#pollList");
@@ -962,6 +990,7 @@ function renderPolls(skipRefresh) {
     </div>`;
   }).join("");
   list.querySelectorAll("[data-poll]").forEach((el) => el.onclick = () => { view = { type: "poll", pollId: el.dataset.poll }; render(); });
+  wireSearch("pollSearch", "#pollList", ".exp-row");
   if (!skipRefresh && store.loadPolls) {
     const sig = () => JSON.stringify(store.polls().map((p) => [p.id, p.myStatus, p.voted, p.closed, p.optionCount]));
     const before = sig();
@@ -2909,7 +2938,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11w · Groups/Trips collapse + count badge · dashboard filter (All/Groups/Trips/Friends) favorites-first, capped · mobile-tuned";
+const BUILD = "2026-08-11x · payment reminders default ON (weekly) · search bars on Friends/Messages/Polls · approvals avatar colors";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
