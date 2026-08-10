@@ -318,7 +318,7 @@ class CloudStore {
     this.state.friends = []; this.state.friendRequests = []; this.state.invitations = [];
     await this._try("friends", async () => {
       const { data } = await this.sb.rpc("my_friends");
-      this.state.friends = (data || []).map((f) => ({ id: f.id, name: f.name || (f.email || "").split("@")[0], username: f.username || null, email: f.email || "", userId: f.id, color: f.avatar_color || null }));
+      this.state.friends = (data || []).map((f) => ({ id: f.id, name: f.name || (f.email || "").split("@")[0], username: f.username || null, email: f.email || "", userId: f.id, color: f.avatar_color || null, active: f.active !== false }));
     });
     await this._try("friend requests", async () => {
       const { data } = await this.sb.rpc("my_friend_requests");
