@@ -58,6 +58,9 @@ const kindIcon = { group: "👨‍👩‍👧", trip: "🧳", individual: "🧍"
 
 // ---- trip→group rollup: a group's pages include expenses from its trips ----
 function childrenOf(l) { return store.ledgers().filter((x) => x.parentId === l.id); }
+// Where to land when opening a ledger: trips open on their Details tab, everything
+// else on Expenses.
+function landTab(id) { const l = store.ledgerById(id); return l && l.kind === "trip" ? "details" : "expenses"; }
 function rolledExpenses(l) {
   if (l.kind === "group") {
     const kids = childrenOf(l);
@@ -195,7 +198,7 @@ function fillList(sel, ledgers) {
     const badge = n === 0 ? "" : `<span class="badge ${n > 0 ? "owed" : "owe"}">${n > 0 ? "+" : ""}${formatMoney(n, l.baseCurrency)}</span>`;
     return `<button data-ledger="${l.id}" class="${view.ledgerId === l.id ? "active" : ""}">${kindIcon[l.kind]} <span>${esc(ledgerDisplayName(l))}</span>${badge}</button>`;
   }).join("");
-  el.querySelectorAll("[data-ledger]").forEach((b) => b.onclick = () => { view = { type: "ledger", ledgerId: b.dataset.ledger, tab: "expenses" }; setSidebar(false); render(); });
+  el.querySelectorAll("[data-ledger]").forEach((b) => b.onclick = () => { view = { type: "ledger", ledgerId: b.dataset.ledger, tab: landTab(b.dataset.ledger) }; setSidebar(false); render(); });
 }
 
 // ---------- dashboard ----------
@@ -247,7 +250,7 @@ function renderDashboard() {
         <div class="exp-amt"><div class="${n >= 0 ? "pos" : "neg"}">${n === 0 ? "settled" : (n > 0 ? "you're owed " : "you owe ") + formatMoney(Math.abs(n), l.baseCurrency)}</div></div>
       </div>`;
     }).join("");
-    list.querySelectorAll("[data-ledger]").forEach((b) => b.onclick = () => { view = { type: "ledger", ledgerId: b.dataset.ledger, tab: "expenses" }; render(); });
+    list.querySelectorAll("[data-ledger]").forEach((b) => b.onclick = () => { view = { type: "ledger", ledgerId: b.dataset.ledger, tab: landTab(b.dataset.ledger) }; render(); });
   }
   main.querySelectorAll("[data-new]").forEach((b) => b.onclick = () => openLedgerModal(b.dataset.new));
   $("#quickAdd").onclick = () => { if (!ledgers.length) return toast("Create a trip or group first."); openExpenseModal(ledgers[0].id); };
@@ -1114,7 +1117,7 @@ function renderFriendDetail(friendId) {
       <div class="exp-amt"><div class="${n >= 0 ? "pos" : "neg"}">${n === 0 ? "settled" : (n > 0 ? "owes you " : "you owe ") + formatMoney(Math.abs(n), l.baseCurrency)}</div></div>
       ${n !== 0 ? `<button class="btn ghost sm" data-settle="${l.id}">Settle up</button>` : ""}`;
     sl.appendChild(row);
-    row.querySelector("[data-open]").onclick = () => { view = { type: "ledger", ledgerId: l.id, tab: "expenses" }; render(); };
+    row.querySelector("[data-open]").onclick = () => { view = { type: "ledger", ledgerId: l.id, tab: landTab(l.id) }; render(); };
     const sb = row.querySelector("[data-settle]");
     if (sb) sb.onclick = () => {
       const from = n > 0 ? friendId : "you", to = n > 0 ? "you" : friendId;
@@ -1196,9 +1199,9 @@ function renderLedger() {
     ? ["expenses", "balances", "settle", "reminders", "settings"]
     : l.kind === "group"
       ? ["expenses", "balances", "settle", "reminders", "members", "trips", "settings"]
-      : ["expenses", "balances", "settle", "reminders", "members", "settings"];
-  if (!tabs.includes(view.tab)) view.tab = "expenses";
-  const tabLabel = { expenses: "Expenses", balances: "Balances", settle: "Settle up", reminders: "Reminders", members: "Members", trips: "Trips", settings: "Settings" };
+      : ["details", "expenses", "balances", "settle", "reminders", "members", "settings"];
+  if (!tabs.includes(view.tab)) view.tab = tabs[0];
+  const tabLabel = { details: "Details", expenses: "Expenses", balances: "Balances", settle: "Settle up", reminders: "Reminders", members: "Members", trips: "Trips", settings: "Settings" };
   const parent = l.parentId ? store.ledgerById(l.parentId) : null;
   const nKids = childrenOf(l).length;
 
@@ -1218,7 +1221,8 @@ function renderLedger() {
   main.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => { view.tab = b.dataset.tab; renderLedger(); });
 
   const body = $("#tabBody");
-  if (view.tab === "expenses") renderExpenses(body, l);
+  if (view.tab === "details") renderTripDetails(body, l);
+  else if (view.tab === "expenses") renderExpenses(body, l);
   else if (view.tab === "balances") renderBalances(body, l);
   else if (view.tab === "settle") renderSettle(body, l);
   else if (view.tab === "reminders") renderReminders(body, l);
@@ -1579,6 +1583,275 @@ function openInvite(l, res) {
   $("#copyInv").onclick = async () => { try { await navigator.clipboard.writeText(msg); toast("Invite copied — you can also send it directly."); } catch { toast("Copy failed — select the text and copy it."); } };
 }
 
+// ==================== TRIP DETAILS ====================
+// Reminder presets (seconds before the trip start). "custom" lets the creator
+// pick any number + unit. Up to 3 reminders per trip; each emails all members.
+const REMINDER_UNITS = [
+  { u: "minutes", secs: 60 },
+  { u: "hours", secs: 3600 },
+  { u: "days", secs: 86400 },
+  { u: "weeks", secs: 604800 },
+  { u: "years", secs: 31536000 },
+];
+const REMINDER_PRESETS = [
+  { secs: 3600, label: "1 hour before" },
+  { secs: 86400, label: "1 day before" },
+  { secs: 259200, label: "3 days before" },
+  { secs: 604800, label: "1 week before" },
+  { secs: 31536000, label: "1 year before" },
+];
+// Break a seconds value into the largest whole unit (for the custom editor).
+function secsToCustom(secs) {
+  for (let i = REMINDER_UNITS.length - 1; i >= 0; i--) {
+    const un = REMINDER_UNITS[i];
+    if (secs % un.secs === 0) return { num: secs / un.secs, unit: un.u };
+  }
+  return { num: Math.max(1, Math.round(secs / 60)), unit: "minutes" };
+}
+// Human label for a reminder ("2 weeks before"), matching a preset when possible.
+function reminderLabel(secs) {
+  const p = REMINDER_PRESETS.find((x) => x.secs === secs);
+  if (p) return p.label;
+  const c = secsToCustom(secs);
+  const u = c.num === 1 ? c.unit.replace(/s$/, "") : c.unit;
+  return `${c.num} ${u} before`;
+}
+// Date+time inputs → ISO (and back). Empty time falls back to a sensible default.
+function dtFromInputs(dateVal, timeVal, defTime) {
+  if (!dateVal) return null;
+  return new Date(`${dateVal}T${timeVal || defTime || "00:00"}:00`).toISOString();
+}
+function dtToInputs(iso) {
+  if (!iso) return { date: "", time: "" };
+  const d = new Date(iso); if (isNaN(d)) return { date: "", time: "" };
+  const pad = (n) => String(n).padStart(2, "0");
+  return { date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
+}
+
+// Lazy-load the Google Maps Places library (only if a key is configured).
+let _mapsPromise = null;
+function ensureMaps() {
+  if (window.google?.maps?.places) return Promise.resolve(true);
+  if (!CONFIG.GOOGLE_MAPS_KEY) return Promise.resolve(false);
+  if (_mapsPromise) return _mapsPromise;
+  _mapsPromise = new Promise((resolve) => {
+    const s = document.createElement("script");
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(CONFIG.GOOGLE_MAPS_KEY)}&libraries=places`;
+    s.async = true; s.defer = true;
+    s.onload = () => resolve(!!window.google?.maps?.places);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+  return _mapsPromise;
+}
+
+// Trips currently showing their edit form (by ledger id).
+const tripEditing = new Set();
+
+function renderTripDetails(body, l) {
+  const admin = !CLOUD || iAmAdminOf(l);
+  const td = l.tripDetails || null;
+  // Admins with no details yet go straight to the form; others (and admins who
+  // aren't actively editing) see the read-only view.
+  if (admin && (tripEditing.has(l.id) || !td)) return renderTripDetailsForm(body, l, td);
+
+  if (!td) {
+    body.innerHTML = emptyState("🧭", "No trip details yet", "The trip organizer hasn't added details like the location, dates, or notes yet.");
+    return;
+  }
+
+  const range = (td.startAt && td.endAt) ? rangeSummary("datetime", td.startAt, td.endAt) : "";
+  const parent = l.parentId ? store.ledgerById(l.parentId) : null;
+  const mapLink = (td.lat != null && td.lng != null)
+    ? `https://www.google.com/maps/search/?api=1&query=${td.lat},${td.lng}`
+    : (td.location ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(td.location)}` : "");
+
+  const remRows = (td.reminders && td.reminders.length)
+    ? td.reminders.map((r) => {
+        const fire = td.startAt ? new Date(new Date(td.startAt).getTime() - (Number(r.secs) || 0) * 1000) : null;
+        const when = fire && !isNaN(fire) ? fmtDayTime(fire.toISOString()) : "";
+        return `<div class="exp-row"><div class="exp-cat">⏰</div><div class="exp-main">
+          <div class="exp-desc">${esc(r.label || reminderLabel(Number(r.secs) || 0))}</div>
+          <div class="exp-meta">Emails everyone${when ? " · " + when : ""}${r.sentAt ? " · ✅ sent" : ""}</div>
+        </div></div>`;
+      }).join("")
+    : `<div class="exp-meta" style="padding:6px 2px">No reminders set.</div>`;
+
+  body.innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+        <div>
+          <div class="exp-meta">📍 Location</div>
+          <div style="font-size:16px;font-weight:600;margin-top:2px">${esc(td.location || "—")}</div>
+          ${mapLink ? `<a href="${mapLink}" target="_blank" rel="noopener" class="exp-meta" style="color:var(--brand);text-decoration:underline">Open in Google Maps ↗</a>` : ""}
+        </div>
+        ${admin ? `<button class="btn ghost" id="tdEdit" style="flex:none">✎ Edit</button>` : ""}
+      </div>
+      <div style="margin-top:16px"><div class="exp-meta">🗓 When</div>
+        <div style="margin-top:2px">${td.startAt ? fmtDayTime(td.startAt) : "—"} → ${td.endAt ? fmtDayTime(td.endAt) : "—"}${range ? ` <span class="exp-meta">(${range})</span>` : ""}</div>
+      </div>
+      <div style="margin-top:16px"><div class="exp-meta">📝 Description</div>
+        <div style="margin-top:2px;white-space:pre-wrap">${esc(td.description || "—")}</div>
+      </div>
+      ${td.notes ? `<div style="margin-top:16px"><div class="exp-meta">⚠️ Important notes</div>
+        <div style="margin-top:2px;white-space:pre-wrap">${esc(td.notes)}</div></div>` : ""}
+    </div>
+    <div class="card" style="margin-top:14px">
+      <label style="margin-top:0">⏰ Reminders</label>
+      <div style="margin-top:6px">${remRows}</div>
+    </div>
+    <div class="hint" style="margin-top:12px">👀 Everyone in this trip can see these details${parent ? `, and so can everyone in <b>${esc(parent.name)}</b> (it's tagged there)` : ""}. ${admin ? "Only admins/owners can change them." : "Only admins/owners can change them."}</div>`;
+
+  if ($("#tdEdit")) $("#tdEdit").onclick = () => { tripEditing.add(l.id); renderLedger(); };
+}
+
+function renderTripDetailsForm(body, l, td) {
+  td = td || {};
+  const hasDetails = !!(l.tripDetails);
+  const s = dtToInputs(td.startAt), e = dtToInputs(td.endAt);
+  const reminders = Array.isArray(td.reminders) ? td.reminders : [];
+
+  // Build 3 reminder slots, pre-filling from stored reminders.
+  const slot = (i) => {
+    const r = reminders[i];
+    const cur = r ? Number(r.secs) : null;
+    const isPreset = cur != null && REMINDER_PRESETS.some((p) => p.secs === cur);
+    const isCustom = cur != null && !isPreset;
+    const cust = isCustom ? secsToCustom(cur) : { num: 1, unit: "days" };
+    const opts = [`<option value="">— none —</option>`]
+      .concat(REMINDER_PRESETS.map((p) => `<option value="${p.secs}" ${isPreset && p.secs === cur ? "selected" : ""}>${p.label}</option>`))
+      .concat(`<option value="custom" ${isCustom ? "selected" : ""}>Custom…</option>`).join("");
+    const unitOpts = REMINDER_UNITS.map((un) => `<option value="${un.u}" ${cust.unit === un.u ? "selected" : ""}>${un.u}</option>`).join("");
+    return `<div class="row" style="margin-top:8px;align-items:center;flex-wrap:wrap">
+      <select data-rp="${i}" style="flex:1;min-width:150px">${opts}</select>
+      <div data-rc="${i}" style="display:${isCustom ? "flex" : "none"};gap:8px;flex:none;align-items:center">
+        <input data-rnum="${i}" type="number" min="1" value="${cust.num}" style="width:80px">
+        <select data-runit="${i}" style="width:110px">${unitOpts}</select>
+        <span class="exp-meta">before</span>
+      </div>
+    </div>`;
+  };
+
+  const mapsHint = CONFIG.GOOGLE_MAPS_KEY
+    ? `Start typing to pick a place from Google Maps, or just type any address — it's kept as-is.`
+    : `Type the address or place name.`;
+
+  body.innerHTML = `
+    <div class="card">
+      <label style="margin-top:0">Trip name <span class="exp-meta">· required</span></label>
+      <input id="tdName" value="${esc(l.name)}" placeholder="Tokyo 2026">
+
+      <label>📍 Location <span class="exp-meta">· required</span></label>
+      <input id="tdLoc" value="${esc(td.location || "")}" placeholder="Shibuya Crossing, Tokyo" autocomplete="off"
+        data-lat="${td.lat ?? ""}" data-lng="${td.lng ?? ""}">
+      <div class="hint" style="margin-top:6px">${mapsHint}</div>
+
+      <div class="row" style="margin-top:14px;flex-wrap:wrap">
+        <div style="flex:1;min-width:220px">
+          <label style="margin-top:0">🗓 Starts <span class="exp-meta">· required</span></label>
+          <div class="row"><input id="tdStartDate" type="date" value="${s.date}"><input id="tdStartTime" type="time" value="${s.time}"></div>
+        </div>
+        <div style="flex:1;min-width:220px">
+          <label style="margin-top:0">🏁 Ends <span class="exp-meta">· required</span></label>
+          <div class="row"><input id="tdEndDate" type="date" value="${e.date}"><input id="tdEndTime" type="time" value="${e.time}"></div>
+        </div>
+      </div>
+
+      <label>📝 Description <span class="exp-meta">· required</span></label>
+      <textarea id="tdDesc" rows="3" placeholder="What's the plan? Flights, hotel, the itinerary…">${esc(td.description || "")}</textarea>
+
+      <label>⚠️ Important notes <span class="exp-meta">· optional</span></label>
+      <textarea id="tdNotes" rows="3" placeholder="Allergies, dietary needs, emergency contacts, anything to account for…">${esc(td.notes || "")}</textarea>
+
+      <label>⏰ Reminders <span class="exp-meta">· up to 3, each emails everyone</span></label>
+      <div class="hint" style="margin-top:2px;margin-bottom:2px">We'll email all trip members at each time you pick before the trip starts.</div>
+      ${slot(0)}${slot(1)}${slot(2)}
+
+      <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn" id="tdSave">Save details</button>
+        ${hasDetails ? `<button class="btn ghost" id="tdCancel">Cancel</button>` : ""}
+      </div>
+    </div>`;
+
+  // Show/hide the custom row when a slot switches to "Custom…".
+  [0, 1, 2].forEach((i) => {
+    const sel = body.querySelector(`[data-rp="${i}"]`);
+    if (sel) sel.onchange = () => { const rc = body.querySelector(`[data-rc="${i}"]`); rc.style.display = sel.value === "custom" ? "flex" : "none"; };
+  });
+
+  // Google Places autocomplete (graceful — no key just leaves it as a text box).
+  ensureMaps().then((ok) => {
+    if (!ok) return;
+    const input = $("#tdLoc"); if (!input || input._acWired) return;
+    input._acWired = true;
+    try {
+      const ac = new google.maps.places.Autocomplete(input, { fields: ["formatted_address", "geometry", "name"] });
+      ac.addListener("place_changed", () => {
+        const p = ac.getPlace();
+        const addr = p.formatted_address || p.name || input.value;
+        input.value = addr;
+        const loc = p.geometry?.location;
+        input.dataset.lat = loc ? loc.lat() : "";
+        input.dataset.lng = loc ? loc.lng() : "";
+      });
+    } catch (_) {}
+  });
+
+  if ($("#tdCancel")) $("#tdCancel").onclick = () => { tripEditing.delete(l.id); renderLedger(); };
+
+  $("#tdSave").onclick = async () => {
+    const name = $("#tdName").value.trim();
+    const loc = $("#tdLoc").value.trim();
+    const startAt = dtFromInputs($("#tdStartDate").value, $("#tdStartTime").value, "09:00");
+    const endAt = dtFromInputs($("#tdEndDate").value, $("#tdEndTime").value, "17:00");
+    const desc = $("#tdDesc").value.trim();
+    const notes = $("#tdNotes").value.trim();
+    if (!name) return toast("Give the trip a name.");
+    if (!loc) return toast("Add a location.");
+    if (!startAt) return toast("Pick a start date.");
+    if (!endAt) return toast("Pick an end date.");
+    if (new Date(endAt) < new Date(startAt)) return toast("The end must be after the start.");
+    if (!desc) return toast("Add a description.");
+
+    // Collect reminder slots, de-duping identical durations, preserving sentAt for
+    // unchanged ones (so editing text doesn't re-fire an already-sent reminder).
+    const prev = Array.isArray(td.reminders) ? td.reminders : [];
+    const seen = new Set(); const rem = [];
+    for (const i of [0, 1, 2]) {
+      const v = body.querySelector(`[data-rp="${i}"]`).value;
+      if (!v) continue;
+      let secs;
+      if (v === "custom") {
+        const num = parseInt(body.querySelector(`[data-rnum="${i}"]`).value, 10);
+        const un = REMINDER_UNITS.find((x) => x.u === body.querySelector(`[data-runit="${i}"]`).value);
+        if (!num || num < 1 || !un) continue;
+        secs = num * un.secs;
+      } else {
+        secs = parseInt(v, 10);
+      }
+      if (!secs || seen.has(secs)) continue;
+      seen.add(secs);
+      const was = prev.find((r) => Number(r.secs) === secs);
+      rem.push({ secs, label: reminderLabel(secs), sentAt: was ? (was.sentAt || null) : null });
+    }
+
+    const input = $("#tdLoc");
+    const lat = input.dataset.lat !== "" ? Number(input.dataset.lat) : null;
+    const lng = input.dataset.lng !== "" ? Number(input.dataset.lng) : null;
+    const details = {
+      location: loc, lat: isFinite(lat) ? lat : null, lng: isFinite(lng) ? lng : null,
+      startAt, endAt, description: desc, notes: notes || "", reminders: rem,
+    };
+
+    const btn = $("#tdSave"); btn.disabled = true;
+    if (name !== l.name) store.updateLedger(l.id, { name });
+    const res = await store.setTripDetails(l.id, details);
+    btn.disabled = false;
+    if (!res || res.ok === false) return toast((res && res.error) || "Couldn't save — are you an admin?");
+    tripEditing.delete(l.id); renderLedger(); toast("Trip details saved.");
+  };
+}
+
 // A group's Trips tab: trips tagged to it (via parentId). Tagging/untagging just
 // sets the trip's parent — so they appear/disappear here automatically.
 function renderGroupTrips(body, l) {
@@ -1604,7 +1877,7 @@ function renderGroupTrips(body, l) {
     </div>` : ""}`;
   body.querySelectorAll("[data-triprow]").forEach((el) => el.onclick = (e) => {
     if (e.target.closest("[data-untag]")) return;
-    view = { type: "ledger", ledgerId: el.dataset.triprow, tab: "expenses" }; render();
+    view = { type: "ledger", ledgerId: el.dataset.triprow, tab: "details" }; render();
   });
   body.querySelectorAll("[data-untag]").forEach((b) => b.onclick = (e) => {
     e.stopPropagation();
@@ -1800,8 +2073,10 @@ function openLedgerModal(kind, presetParent) {
       if (kind === "individual") { const p = store.addPerson({ name: input, email: "" }); memberIds = [p.id]; }
     }
     const l = store.addLedger({ kind, name: input, baseCurrency: $("#mCur").value, memberIds, parentId: $("#mParent")?.value || null });
-    closeModal(); view = { type: "ledger", ledgerId: l.id, tab: CLOUD ? "members" : "expenses" }; render();
-    toast(`${kindLabel[kind]} created.${CLOUD ? " Add people by email in the Members tab." : ""}`);
+    // Trips open on Details so the creator can fill in location/dates/reminders right away.
+    const landing = kind === "trip" ? "details" : (CLOUD ? "members" : "expenses");
+    closeModal(); view = { type: "ledger", ledgerId: l.id, tab: landing }; render();
+    toast(`${kindLabel[kind]} created.${kind === "trip" ? " Add the trip details below." : (CLOUD ? " Add people by email in the Members tab." : "")}`);
   };
 }
 
@@ -2347,7 +2622,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11k · group Trips tab (tag/untag) + delete is owner-only";
+const BUILD = "2026-08-11l · trip planner: Details tab (location/dates/notes) + up to 3 email reminders";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
