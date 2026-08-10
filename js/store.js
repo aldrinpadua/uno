@@ -81,6 +81,11 @@ class LocalStore {
     this.state.expenses = this.state.expenses.filter((e) => e.ledgerId !== id);
     this._persist();
   }
+  async setTripDetails(id, details) {
+    const l = this.ledgerById(id);
+    if (l) { l.tripDetails = details; this._persist(); }
+    return { ok: true };
+  }
 
   // ---- expenses ------------------------------------------------------------
   expensesFor(ledgerId) {
