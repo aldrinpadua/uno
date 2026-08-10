@@ -1249,7 +1249,7 @@ function renderLedger() {
       ? ["expenses", "balances", "settle", "reminders", "members", "trips", "settings"]
       : ["details", "expenses", "balances", "settle", "reminders", "members", "settings"];
   if (!tabs.includes(view.tab)) view.tab = tabs[0];
-  const tabLabel = { details: "Details", expenses: "Expenses", balances: "Balances", settle: "Settle up", reminders: "Reminders", members: "Members", trips: "Trips", settings: "Settings" };
+  const tabLabel = { details: "Details", expenses: "Expenses", balances: "Balances", settle: "Settle up", reminders: "Payment Reminders", members: "Members", trips: "Trips", settings: "Settings" };
   const parent = l.parentId ? store.ledgerById(l.parentId) : null;
   const nKids = childrenOf(l).length;
 
@@ -1746,7 +1746,7 @@ function renderTripDetails(body, l) {
         <div style="margin-top:2px;white-space:pre-wrap">${esc(td.notes)}</div></div>` : ""}
     </div>
     <div class="card" style="margin-top:14px">
-      <label style="margin-top:0">⏰ Reminders</label>
+      <label style="margin-top:0">⏰ Trip reminders</label>
       <div style="margin-top:6px">${remRows}</div>
     </div>
     <div class="hint" style="margin-top:12px">👀 Everyone in this trip can see these details${parent ? `, and so can everyone in <b>${esc(parent.name)}</b> (it's tagged there)` : ""}. ${admin ? "Only admins/owners can change them." : "Only admins/owners can change them."}</div>`;
@@ -1813,7 +1813,7 @@ function renderTripDetailsForm(body, l, td) {
       <label>⚠️ Important notes <span class="exp-meta">· optional</span></label>
       <textarea id="tdNotes" rows="3" placeholder="Allergies, dietary needs, emergency contacts, anything to account for…">${esc(td.notes || "")}</textarea>
 
-      <label>⏰ Reminders <span class="exp-meta">· up to 3, each emails everyone</span></label>
+      <label>⏰ Trip reminders <span class="exp-meta">· up to 3, each emails everyone before the trip</span></label>
       <div class="hint" style="margin-top:2px;margin-bottom:2px">We'll email all trip members at each time you pick before the trip starts.</div>
       ${slot(0)}${slot(1)}${slot(2)}
 
@@ -2703,7 +2703,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11n · per-user time zones (auto-follow device) + tz-aware reminders/dates + end≥start guards + robust delete (no ghost groups)";
+const BUILD = "2026-08-11o · \"Payment Reminders\" tab rename + \"Trip reminders\" wording + per-minute trip reminder cron (tight reminders fire)";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
