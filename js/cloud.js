@@ -427,7 +427,14 @@ class CloudStore {
     if (meta && meta.clearedAt) q = q.gt("created_at", meta.clearedAt); // hide messages I cleared
     const { data, error } = await q;
     if (error) { console.error("[cloud] load messages failed:", error.message); return []; }
-    return (data || []).map((m) => ({ id: m.id, chatId: m.chat_id, sender: m.sender, mine: m.sender === myId, body: m.body || "", deleted: !!m.deleted, editedAt: m.edited_at || null, attachments: m.attachments || null, mentions: m.mentions || null, at: m.created_at ? new Date(m.created_at).getTime() : 0 }));
+    return (data || []).map((m) => ({ id: m.id, chatId: m.chat_id, sender: m.sender, mine: m.sender === myId, body: m.body || "", deleted: !!m.deleted, editedAt: m.edited_at || null, attachments: m.attachments || null, mentions: m.mentions || null, at: m.created_at ? new Date(m.created_at).getTime() : 0, pinnedAt: m.pinned_at ? new Date(m.pinned_at).getTime() : null, pinnedBy: m.pinned_by || null }));
+  }
+  // Pin/unpin a message (any chat member may; capped at 15/chat server-side).
+  async pinMessage(messageId, pin) {
+    const { data, error } = await this.sb.rpc("set_message_pin", { p_message: messageId, p_pin: !!pin });
+    if (error) return { ok: false, error: error.message };
+    if (data && data.ok === false) return data;
+    return { ok: true };
   }
   async sendMessage(chatId, body, attachments, mentions) {
     const meta = this.chatMeta(chatId);
