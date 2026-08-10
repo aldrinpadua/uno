@@ -202,7 +202,7 @@ class CloudStore {
     // Load the profile if it exists (don't clobber a name/username the user set);
     // create it on very first login.
     await this._try("profile load", async () => {
-      const { data: prof } = await this.sb.from("profiles").select("display_name,email,username,friend_token,avatar_color,timezone").eq("id", myId).maybeSingle();
+      const { data: prof } = await this.sb.from("profiles").select("display_name,email,username,friend_token,avatar_color,timezone,favorites").eq("id", myId).maybeSingle();
       if (prof) {
         you.name = prof.display_name || you.name;
         you.email = (prof.email || myEmail || "").toLowerCase();
@@ -210,6 +210,7 @@ class CloudStore {
         you.friendToken = prof.friend_token || null;
         you.color = prof.avatar_color || null;
         you.timezone = prof.timezone || null;
+        you.favorites = Array.isArray(prof.favorites) ? prof.favorites : [];
       } else {
         await this.sb.from("profiles").insert({ id: myId, display_name: you.name, email: (myEmail || "").toLowerCase() });
         you.username = null;
@@ -671,6 +672,17 @@ class CloudStore {
   async setTimezone(tz) {
     this.state.you.timezone = tz || null; this._notify();
     await this._try("timezone", () => this.sb.from("profiles").update({ timezone: tz || null }).eq("id", myId));
+    return { ok: true };
+  }
+  // Star/unstar a group or trip. Favorites are an ordered list (order marked), kept
+  // on the profile so they follow the user across devices.
+  async toggleFavorite(id) {
+    const you = this.state.you;
+    const fav = Array.isArray(you.favorites) ? you.favorites.slice() : [];
+    const i = fav.indexOf(id);
+    if (i >= 0) fav.splice(i, 1); else fav.push(id);
+    you.favorites = fav; this._notify();
+    await this._try("favorites", () => this.sb.from("profiles").update({ favorites: fav }).eq("id", myId));
     return { ok: true };
   }
   // Start a verified email change: Supabase emails a confirmation link to the new

@@ -92,6 +92,14 @@ class LocalStore {
     this._persist();
     return { ok: true };
   }
+  async toggleFavorite(id) {
+    if (!this.state.you) return { ok: true };
+    const fav = Array.isArray(this.state.you.favorites) ? this.state.you.favorites.slice() : [];
+    const i = fav.indexOf(id);
+    if (i >= 0) fav.splice(i, 1); else fav.push(id);
+    this.state.you.favorites = fav; this._persist();
+    return { ok: true };
+  }
 
   // ---- expenses ------------------------------------------------------------
   expensesFor(ledgerId) {

@@ -185,8 +185,8 @@ function renderSidebar() {
     </div>`;
   $("#youCard").onclick = () => openPersonModal("you");
 
-  const groups = store.ledgers().filter((l) => l.kind === "group");
-  const trips = store.ledgers().filter((l) => l.kind === "trip");
+  const groups = orderByFav(store.ledgers().filter((l) => l.kind === "group"));
+  const trips = orderByFav(store.ledgers().filter((l) => l.kind === "trip"));
   fillList("#groupList", groups, "group");
   fillList("#tripList", trips, "trip");
 
@@ -194,8 +194,19 @@ function renderSidebar() {
   updateInboxBadge();
 }
 
+// The current user's favorite ledger ids, in the order they starred them.
+function favIds() { return (store.state.you && Array.isArray(store.state.you.favorites)) ? store.state.you.favorites : []; }
+function isFav(id) { return favIds().includes(id); }
+// Float favorites to the top (in starred order); everything else keeps its order
+// (Array.sort is stable, so non-favorites don't get reshuffled).
+function orderByFav(ledgers) {
+  const fav = favIds();
+  const rank = (l) => { const i = fav.indexOf(l.id); return i < 0 ? Infinity : i; };
+  return ledgers.slice().sort((a, b) => rank(a) - rank(b));
+}
+
 // How many of each sidebar list are shown before "Show more" (keeps the nav tidy).
-const LIST_CAP = 5;
+const LIST_CAP = 3;
 const listExpanded = { group: false, trip: false };
 function fillList(sel, ledgers, key) {
   const el = $(sel);
@@ -206,14 +217,21 @@ function fillList(sel, ledgers, key) {
     const { base } = computeBalances(rolledExpenses(l), l.baseCurrency);
     const n = base.get("you") || 0;
     const badge = n === 0 ? "" : `<span class="badge ${n > 0 ? "owed" : "owe"}">${n > 0 ? "+" : ""}${formatMoney(n, l.baseCurrency)}</span>`;
+    const fav = isFav(l.id);
+    const star = `<span class="fav-star${fav ? " on" : ""}" data-fav="${l.id}" title="${fav ? "Remove from favorites" : "Add to favorites"}">${fav ? "★" : "☆"}</span>`;
     // No per-item kind emoji — the section header carries the icon. Keeps the list clean.
-    return `<button data-ledger="${l.id}" class="${view.ledgerId === l.id ? "active" : ""}"><span>${esc(ledgerDisplayName(l))}</span>${badge}</button>`;
+    return `<button data-ledger="${l.id}" class="${view.ledgerId === l.id ? "active" : ""}"><span class="nav-name">${esc(ledgerDisplayName(l))}</span>${badge}${star}</button>`;
   }).join("");
   const more = ledgers.length > LIST_CAP
     ? `<button class="list-more" data-more="${key}">${expanded ? "▲ Show less" : `▾ Show ${ledgers.length - LIST_CAP} more`}</button>`
     : "";
   el.innerHTML = rowHtml + more;
   el.querySelectorAll("[data-ledger]").forEach((b) => b.onclick = () => { view = { type: "ledger", ledgerId: b.dataset.ledger, tab: landTab(b.dataset.ledger) }; setSidebar(false); render(); });
+  el.querySelectorAll("[data-fav]").forEach((s) => s.onclick = async (e) => {
+    e.stopPropagation();
+    await store.toggleFavorite(s.dataset.fav);
+    renderSidebar();
+  });
   const moreBtn = el.querySelector("[data-more]");
   if (moreBtn) moreBtn.onclick = () => { listExpanded[key] = !listExpanded[key]; renderSidebar(); };
 }
@@ -474,10 +492,7 @@ async function renderChat(chatId) {
         <span class="pin-txt" data-jump="${m.id}"><b>${esc(s.name)}</b> ${esc(msgPreview(m))}</span>
         <button class="icon-btn pin-x" data-unpin="${m.id}" title="Unpin">✖</button></div>`;
     }).join("")}${pins.length > 2 ? `<button class="pin-more" id="pinMore">+${pins.length - 2} more pinned · view all</button>` : ""}</div>`;
-    bar.querySelectorAll("[data-jump]").forEach((el) => el.onclick = () => {
-      const row = document.getElementById("msg-" + el.dataset.jump);
-      if (row) { row.scrollIntoView({ behavior: "smooth", block: "center" }); row.classList.add("msg-flash"); setTimeout(() => row.classList.remove("msg-flash"), 1500); }
-    });
+    bar.querySelectorAll("[data-jump]").forEach((el) => el.onclick = () => jumpToMessage(el.dataset.jump));
     bar.querySelectorAll("[data-unpin]").forEach((el) => el.onclick = async () => {
       const r = await store.pinMessage(+el.dataset.unpin, false);
       if (r.ok) { reload(); toast("Unpinned."); } else toast(r.error || "Couldn't unpin.");
@@ -651,6 +666,17 @@ function openNewChatModal() {
   };
 }
 
+// Scroll the open chat to a message and briefly flash it (used by the pin banner
+// and the "all pins" list). Closes any modal first so the chat is visible.
+function jumpToMessage(id) {
+  const row = document.getElementById("msg-" + id);
+  if (!row) return false;
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+  row.classList.add("msg-flash");
+  setTimeout(() => row.classList.remove("msg-flash"), 1500);
+  return true;
+}
+
 // Short, one-line preview of a message for the pin banner / pinned list.
 function msgPreview(m) {
   if (m.deleted) return "message deleted";
@@ -705,10 +731,16 @@ async function openPinnedModal(chatId) {
     const s = store.chatSender(chatId, m.sender);
     const when = new Date(m.pinnedAt).toLocaleDateString([], { month: "short", day: "numeric" });
     return `<div class="bal-row"><div class="exp-cat">📌</div>
-      <div class="grow" style="min-width:0"><b>${esc(s.name)}</b> <span class="exp-meta">pinned ${when}</span>
+      <div class="grow" data-jump="${m.id}" style="min-width:0;cursor:pointer"><b>${esc(s.name)}</b> <span class="exp-meta">pinned ${when}</span>
         <div style="margin-top:2px;overflow-wrap:anywhere">${esc(msgPreview(m))}</div></div>
       <button class="btn ghost sm" data-unpin="${m.id}">Unpin</button></div>`;
-  }).join("")}</div><div class="hint" style="margin-top:8px">${pins.length}/15 pinned. Any member can pin or unpin.</div>`;
+  }).join("")}</div><div class="hint" style="margin-top:8px">Tap a message to jump to it. ${pins.length}/15 pinned — any member can pin or unpin.</div>`;
+  // Tap a pinned message → close the list and jump to it in the thread.
+  bodyEl.querySelectorAll("[data-jump]").forEach((el) => el.onclick = () => {
+    const id = el.dataset.jump; closeModal();
+    // let the modal close/paint settle before scrolling
+    setTimeout(() => jumpToMessage(id), 50);
+  });
   bodyEl.querySelectorAll("[data-unpin]").forEach((el) => el.onclick = async () => {
     el.disabled = true;
     const r = await store.pinMessage(+el.dataset.unpin, false);
@@ -2822,7 +2854,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11q · pinned messages (banner + pinned list, any member, cap 15) + build 11p UI/avatar fixes";
+const BUILD = "2026-08-11s · favorite groups/trips (star → top) + sidebar shows 3 · indented names · pin-list tap-to-jump";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
