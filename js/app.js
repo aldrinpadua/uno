@@ -336,13 +336,18 @@ function renderInvitations() {
   const main = $("#main");
   const reqs = store.state.friendRequests || [];
   const invs = store.state.invitations || [];
+  const pollInvs = (store.polls ? store.polls() : []).filter((p) => p.myStatus === "invited");
   main.innerHTML = `${mobileBar()}
-    <div class="page-head"><div><h1 class="page-title">✉️ Invitations</h1><p class="page-sub">Friend requests and group/trip invites waiting on you.</p></div></div>
+    <div class="page-head"><div><h1 class="page-title">✉️ Invitations</h1><p class="page-sub">Friend requests, group/trip invites, and poll invites waiting on you.</p></div></div>
     <h3 style="margin:18px 0 8px">Friend requests ${reqs.length ? `<span class="tag" style="color:var(--amber)">${reqs.length}</span>` : ""}</h3>
     <div class="card" style="padding:6px 0">${reqs.length ? reqs.map((r) => `<div class="bal-row">${avatarEl(r)}<div class="grow"><b>${esc(r.name)}</b>${r.username ? ` <span class="exp-meta">@${esc(r.username)}</span>` : ""} <span class="exp-meta">wants to be friends</span></div><button class="btn sm" data-facc="${r.id}">Accept</button> <button class="btn ghost sm" data-fdec="${r.id}">Decline</button></div>`).join("") : `<div class="exp-meta" style="padding:10px 14px">No friend requests.</div>`}</div>
     <h3 style="margin:22px 0 8px">Group &amp; trip invites ${invs.length ? `<span class="tag" style="color:var(--amber)">${invs.length}</span>` : ""}</h3>
-    <div class="card" style="padding:6px 0">${invs.length ? invs.map((i) => `<div class="bal-row"><div class="exp-cat">${kindIcon[i.kind] || "👥"}</div><div class="grow"><b>${esc(i.name)}</b> <span class="exp-meta">${kindLabel[i.kind] || "Group"} · invited by ${esc(i.inviter)}</span></div><button class="btn sm" data-iacc="${i.ledgerId}">Accept</button> <button class="btn ghost sm" data-idec="${i.ledgerId}">Decline</button></div>`).join("") : `<div class="exp-meta" style="padding:10px 14px">No pending invites.</div>`}</div>`;
+    <div class="card" style="padding:6px 0">${invs.length ? invs.map((i) => `<div class="bal-row"><div class="exp-cat">${kindIcon[i.kind] || "👥"}</div><div class="grow"><b>${esc(i.name)}</b> <span class="exp-meta">${kindLabel[i.kind] || "Group"} · invited by ${esc(i.inviter)}</span></div><button class="btn sm" data-iacc="${i.ledgerId}">Accept</button> <button class="btn ghost sm" data-idec="${i.ledgerId}">Decline</button></div>`).join("") : `<div class="exp-meta" style="padding:10px 14px">No pending invites.</div>`}</div>
+    <h3 style="margin:22px 0 8px">Poll invites ${pollInvs.length ? `<span class="tag" style="color:var(--amber)">${pollInvs.length}</span>` : ""}</h3>
+    <div class="card" style="padding:6px 0">${pollInvs.length ? pollInvs.map((p) => `<div class="bal-row"><div class="exp-cat">${POLL_ICON[p.kind] || "📊"}</div><div class="grow"><b>${esc(p.title)}</b> <span class="exp-meta">poll${p.isRunoff ? " · runoff" : ""}${p.closed ? " · closed" : ""}</span></div><button class="btn sm" data-pacc="${p.id}">Accept</button> <button class="btn ghost sm" data-pdec="${p.id}">Decline</button></div>`).join("") : `<div class="exp-meta" style="padding:10px 14px">No poll invites.</div>`}</div>`;
   wireMobile();
+  main.querySelectorAll("[data-pacc]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.respondPoll(b.dataset.pacc, true); if (r.ok) { view = { type: "poll", pollId: b.dataset.pacc }; render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
+  main.querySelectorAll("[data-pdec]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.respondPoll(b.dataset.pdec, false); if (r.ok) { toast("Declined."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
   main.querySelectorAll("[data-facc]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.acceptFriendRequest(+b.dataset.facc); if (r.ok) { toast("You're now friends."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
   main.querySelectorAll("[data-fdec]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.declineFriendRequest(+b.dataset.fdec); if (r.ok) { toast("Declined."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
   main.querySelectorAll("[data-iacc]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.acceptInvitation(b.dataset.iacc); if (r.ok) { toast("Joined."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
@@ -674,6 +679,17 @@ function optionMain(kind, o) {
   if (!o.start_at || !o.end_at) return "(incomplete)";
   return kind === "dates" ? `${fmtDay(o.start_at)} – ${fmtDay(o.end_at)}` : `${fmtDayTime(o.start_at)} – ${fmtDayTime(o.end_at)}`;
 }
+// Deadline from a date input + a time input; time defaults to 11:59 PM.
+function deadlineFromInputs(dateVal, timeVal) {
+  if (!dateVal) return null;
+  return new Date(`${dateVal}T${timeVal || "23:59"}:00`).toISOString();
+}
+// Split an ISO deadline back into {date, time} for editing (local).
+function deadlineToInputs(iso) {
+  if (!iso) return { date: "", time: "23:59" };
+  const d = new Date(iso); const pad = (n) => String(n).padStart(2, "0");
+  return { date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
+}
 
 function renderPolls(skipRefresh) {
   const main = $("#main");
@@ -688,17 +704,17 @@ function renderPolls(skipRefresh) {
   if (!polls.length) { list.innerHTML = emptyState("📊", "No polls yet", "Create a poll to pick trip dates, plans, or anything your group needs to decide."); }
   else list.innerHTML = polls.map((p) => {
     const ended = p.deadline && new Date(p.deadline).getTime() < Date.now();
-    const status = p.closed ? (p.winningOptionId ? "✅ finalized" : "🔒 closed") : (ended ? "⌛ voting ended" : "🟢 open");
-    const isNew = !p.closed && p.myStatus === "invited";
+    const status = p.closed ? "🔒 closed" : (ended ? "⌛ voting ended" : "🟢 open");
+    const pending = !p.closed && !ended && (p.myStatus === "invited" || (p.myStatus === "accepted" && !p.voted));
     return `<div class="exp-row" data-poll="${p.id}" style="cursor:pointer${p.closed ? ";opacity:.75" : ""}">
       <div class="avatar" style="background:#7b5cff">${POLL_ICON[p.kind] || "📊"}</div>
-      <div class="exp-main"><div class="exp-desc">${esc(p.title)}${isNew ? ` <span class="nav-dot" style="margin-left:0">new</span>` : ""}</div>
+      <div class="exp-main"><div class="exp-desc">${esc(p.title)}${p.isRunoff ? ` <span class="tag">runoff</span>` : ""}${pending ? ` <span class="nav-dot" style="margin-left:0">${p.myStatus === "invited" ? "new" : "vote"}</span>` : ""}</div>
         <div class="exp-meta">${status} · ${p.optionCount} option${p.optionCount === 1 ? "" : "s"} · ${p.participantCount + 1} people${p.isMine ? " · yours" : (p.voted ? " · voted" : "")}</div></div>
     </div>`;
   }).join("");
   list.querySelectorAll("[data-poll]").forEach((el) => el.onclick = () => { view = { type: "poll", pollId: el.dataset.poll }; render(); });
   if (!skipRefresh && store.loadPolls) {
-    const sig = () => JSON.stringify(store.polls().map((p) => [p.id, p.myStatus, p.voted, p.closed, p.optionCount, p.winningOptionId]));
+    const sig = () => JSON.stringify(store.polls().map((p) => [p.id, p.myStatus, p.voted, p.closed, p.optionCount]));
     const before = sig();
     store.loadPolls().then(() => { if (view.type === "polls" && sig() !== before) renderPolls(true); });
   }
@@ -731,7 +747,7 @@ function openNewPollModal() {
     <label class="chk"><input type="checkbox" id="npMulti"> Allow people to pick multiple answers</label>
     <label class="chk"><input type="checkbox" id="npAddOpts"> Let participants add their own options</label>
     <label>Voting deadline (optional)</label>
-    <input type="datetime-local" id="npDeadline">
+    <div class="poll-range"><input type="date" id="npDeadDate"><input type="time" id="npDeadTime" value="23:59"></div>
     <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
     <label>Who can vote?</label>
     <div class="chips" id="npFriends">${friends.length ? friends.map((f) => `<span class="chip" data-u="${f.id}">${esc(f.name)}</span>`).join("") : `<span class="exp-meta">No friends yet — add some first.</span>`}</div>
@@ -815,8 +831,7 @@ function openNewPollModal() {
     }
     if (built.length < 2) return toast("Add at least two complete options.");
     if (!chosenU.size && !chosenL.size) return toast("Pick who can vote.");
-    const deadlineVal = $("#npDeadline").value;
-    const deadline = deadlineVal ? new Date(deadlineVal).toISOString() : null;
+    const deadline = deadlineFromInputs($("#npDeadDate").value, $("#npDeadTime").value);
     const btn = $("#npCreate"); btn.disabled = true;
     const r = await store.createPoll({
       title, kind, multiple: $("#npMulti").checked, addOptions: $("#npAddOpts").checked, deadline,
@@ -843,28 +858,51 @@ async function renderPoll(pollId) {
   };
   const paintPoll = (d) => {
     const ended = d.deadline && new Date(d.deadline).getTime() < Date.now();
-    const canVote = !d.closed && !ended && d.my_status !== "declined";
+    const resolved = d.closed || ended;
+    const canVote = !resolved && d.my_status !== "declined";
     const single = !d.allow_multiple;
-    const maxVotes = Math.max(1, ...d.options.map((o) => o.votes || 0));
-    const sel = new Set(d.options.filter((o) => o.mine).map((o) => o.id));
-    const status = d.closed ? (d.winning_option_id ? "✅ Finalized" : "🔒 Closed") : (ended ? "⌛ Voting ended" : "🟢 Open");
+    const manage = d.can_manage;
+    const strip = (s) => s.replace(/<[^>]+>/g, "");
+    $("#main").querySelector(".page-title").textContent = `${POLL_ICON[d.kind] || "📊"} ${d.title}`;
+    const body = $("#pollBody");
+
+    // ---- invitation gate: invited users accept/decline BEFORE seeing the poll ----
+    if (d.my_status === "invited") {
+      body.innerHTML = `<div class="card">
+        <b>You've been invited to this poll.</b>
+        <p class="hint" style="margin:8px 0 0">${resolved ? "Voting has ended — accept to view the results, or decline to remove it." : "Accept to vote, or decline to remove it from your Polls."}</p>
+        <div class="poll-actions" style="margin-top:12px"><button class="btn" id="pAccept">Accept</button><button class="btn ghost" id="pDecline">Decline</button></div>
+      </div>`;
+      $("#pAccept").onclick = async () => { const r = await store.respondPoll(pollId, true); if (r.ok) reload(); else toast(r.error || "Failed."); };
+      $("#pDecline").onclick = () => confirmChoice("Decline this poll? It'll be removed from your Polls and the creator is notified.", "Decline", "Cancel", async (yes) => {
+        if (!yes) return; const r = await store.respondPoll(pollId, false); if (r.ok) { toast("Declined."); view = { type: "polls" }; render(); } else toast(r.error || "Failed.");
+      });
+      return;
+    }
+
+    // ---- winner auto-computed from votes (never chosen by the creator) ----
+    const maxVotes = Math.max(0, ...d.options.map((o) => o.votes || 0));
+    const winners = resolved && maxVotes > 0 ? d.options.filter((o) => (o.votes || 0) === maxVotes) : [];
+    const isTie = winners.length >= 2;
+    const barMax = Math.max(1, maxVotes);
+    const status = resolved ? "🔒 Closed" : "🟢 Open";
     const responded = d.participants.filter((p) => p.status !== "invited").length;
     const declined = d.participants.filter((p) => p.status === "declined");
 
-    $("#main").querySelector(".page-title").textContent = `${POLL_ICON[d.kind] || "📊"} ${d.title}`;
-    const body = $("#pollBody");
     body.innerHTML = `
-      <div class="exp-meta" style="margin-bottom:10px">${status} · by ${esc(d.creator ? d.creator.name : "someone")}${d.deadline ? ` · vote by ${fmtDayTime(d.deadline)}` : ""} · ${single ? "single choice" : "multiple choice"} · anonymous</div>
-      ${d.my_status === "invited" && !d.is_mine ? `<div class="card" style="margin-bottom:12px"><b>You've been invited to vote.</b><div class="row" style="margin-top:8px"><button class="btn ghost" id="pDecline">Decline</button></div></div>` : ""}
+      <div class="exp-meta" style="margin-bottom:10px">${status} · by ${esc(d.creator ? d.creator.name : "someone")}${d.deadline ? ` · ${resolved ? "closed" : "vote by"} ${fmtDayTime(d.deadline)}` : ""} · ${single ? "single choice" : "multiple choice"} · anonymous</div>
+      ${d.parent_poll_id ? `<div class="card" style="margin-bottom:12px">🔁 This is a <b>runoff</b> to break a tie. <a class="prof-link" data-goto="${d.parent_poll_id}">Open the original</a></div>` : ""}
+      ${d.runoff_poll_id ? `<div class="card" style="margin-bottom:12px">⚖️ There was a <b>tie</b> — a runoff poll was created. <a class="prof-link" data-goto="${d.runoff_poll_id}">Open the runoff</a></div>` : ""}
       ${d.my_status === "declined" ? `<div class="disabled-note" style="margin-bottom:12px">You declined this poll.</div>` : ""}
+      ${resolved && !d.runoff_poll_id ? `<div class="card" style="margin-bottom:12px">${maxVotes === 0 ? "No votes were cast." : isTie ? `🏁 <b>Tie</b> between: ${winners.map((o) => esc(strip(optionMain(d.kind, o)))).join(", ")}.` : `🏆 <b>Winner:</b> ${esc(strip(optionMain(d.kind, winners[0])))}`}</div>` : ""}
       <div id="pollOpts">${d.options.map((o) => {
-        const win = d.winning_option_id === o.id;
-        const pct = Math.round(((o.votes || 0) / maxVotes) * 100);
-        const summary = o.all_day || o.start_at ? rangeSummary(d.kind, o.start_at, o.end_at) : "";
+        const win = winners.some((w) => w.id === o.id);
+        const pct = Math.round(((o.votes || 0) / barMax) * 100);
+        const summary = (o.all_day || o.start_at) ? rangeSummary(d.kind, o.start_at, o.end_at) : "";
         return `<div class="poll-result${win ? " win" : ""}">
           <label class="poll-choice">
             ${canVote ? `<input type="${single ? "radio" : "checkbox"}" name="pollsel" value="${o.id}" ${o.mine ? "checked" : ""}>` : `<span class="poll-bullet">${o.mine ? "●" : "○"}</span>`}
-            <span class="poll-choice-main">${optionMain(d.kind, o)}${summary ? ` <span class="poll-sum">(${summary})</span>` : ""}${win ? ` <span class="tag">winner</span>` : ""}</span>
+            <span class="poll-choice-main">${optionMain(d.kind, o)}${summary ? ` <span class="poll-sum">(${summary})</span>` : ""}${win ? ` <span class="tag">${isTie ? "tied" : "winner"}</span>` : ""}</span>
             <span class="poll-count">${o.votes || 0}</span>
           </label>
           ${o.ref_url ? `<a class="poll-ref" href="${esc(o.ref_url)}" target="_blank" rel="noopener">🔗 ${esc(o.ref_url)}</a>` : ""}
@@ -873,18 +911,18 @@ async function renderPoll(pollId) {
         </div>`;
       }).join("")}</div>
       <div class="exp-meta" style="margin-top:8px">${d.total_voters} vote${d.total_voters === 1 ? "" : "s"} · ${responded} of ${d.participants.length} responded${declined.length ? ` · ${declined.length} declined` : ""}</div>
-      ${canVote ? `<div class="row" style="margin-top:12px"><button class="btn" id="pSave">Save my vote</button></div>` : ""}
-      ${d.allow_add_options && !d.closed ? `<div style="margin-top:16px"><button class="btn ghost sm" id="pAddOpt">＋ Add an option</button></div>` : ""}
-      ${d.is_mine ? `<hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
-        <div class="row">
-          ${!d.closed ? `<button class="btn ghost" id="pClose">Close / finalize</button>` : `<button class="btn ghost" id="pReopen">Reopen</button>`}
+      ${canVote ? `<div class="poll-actions" style="margin-top:12px"><button class="btn" id="pSave">Save my vote</button></div>` : ""}
+      ${d.allow_add_options && !resolved ? `<div style="margin-top:14px"><button class="btn ghost sm" id="pAddOpt">＋ Add an option</button></div>` : ""}
+      ${manage ? `<hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+        <div class="poll-actions">
+          ${!resolved ? `<button class="btn ghost" id="pEdit">Edit poll</button>` : ""}
+          ${!d.closed ? `<button class="btn ghost" id="pClose">Close poll</button>` : `<button class="btn ghost" id="pReopen">Reopen</button>`}
+          ${resolved && isTie && !d.runoff_poll_id ? `<button class="btn" id="pRunoff">Reopen runoff for tie</button>` : ""}
           <button class="btn danger" id="pDelete">Delete poll</button>
         </div>
         ${declined.length ? `<p class="hint" style="margin-top:8px">Declined: ${declined.map((p) => esc(p.name)).join(", ")}</p>` : ""}` : ""}`;
 
-    if ($("#pDecline")) $("#pDecline").onclick = () => confirmChoice("Decline this poll? The creator will be notified.", "Decline", "Cancel", async (yes) => {
-      if (!yes) return; const r = await store.respondPoll(pollId, false); if (r.ok) { toast("Declined."); reload(); } else toast(r.error || "Failed.");
-    });
+    body.querySelectorAll("[data-goto]").forEach((el) => el.onclick = () => { view = { type: "poll", pollId: el.dataset.goto }; render(); });
     if ($("#pSave")) $("#pSave").onclick = async () => {
       const picked = [...body.querySelectorAll('input[name="pollsel"]:checked')].map((el) => el.value);
       if (!picked.length) return toast("Pick at least one option.");
@@ -892,8 +930,12 @@ async function renderPoll(pollId) {
       if (r.ok) { toast("Vote saved."); reload(); } else toast(r.error || "Couldn't vote.");
     };
     if ($("#pAddOpt")) $("#pAddOpt").onclick = () => openAddPollOption(d, reload);
-    if ($("#pClose")) $("#pClose").onclick = () => openClosePoll(d, reload);
+    if ($("#pEdit")) $("#pEdit").onclick = () => openEditPollModal(d, reload);
+    if ($("#pClose")) $("#pClose").onclick = () => confirmChoice("Close this poll? The winner is decided automatically from the votes.", "Close poll", "Cancel", async (yes) => {
+      if (!yes) return; const r = await store.closePoll(pollId); if (r.ok) { toast("Poll closed."); reload(); } else toast(r.error || "Failed.");
+    });
     if ($("#pReopen")) $("#pReopen").onclick = async () => { const r = await store.reopenPoll(pollId); if (r.ok) { toast("Reopened."); reload(); } else toast(r.error || "Failed."); };
+    if ($("#pRunoff")) $("#pRunoff").onclick = () => openRunoffModal(d, winners, reload);
     if ($("#pDelete")) $("#pDelete").onclick = () => confirmDelete("Delete this poll for everyone? This can't be undone.", async () => {
       const r = await store.deletePoll(pollId); if (r.ok) { view = { type: "polls" }; render(); toast("Poll deleted."); } else toast(r.error || "Failed.");
     }, { confirmLabel: "Delete poll" });
@@ -937,16 +979,63 @@ function openAddPollOption(d, reload) {
   };
 }
 
-function openClosePoll(d, reload) {
-  modal("Close poll", `
-    <p style="margin-top:0" class="hint">Optionally mark a winning option, then close voting. Option images will be removed to save space.</p>
-    <label>Winning option (optional)</label>
-    <select id="cpWinner"><option value="">— none, just close —</option>
-      ${d.options.map((o) => `<option value="${o.id}">${esc(optionMain(d.kind, o).replace(/<[^>]+>/g, ""))} (${o.votes || 0})</option>`).join("")}</select>
-  `, `<button class="btn ghost" data-close>Cancel</button><button class="btn" id="cpDo">Close poll</button>`);
-  $("#cpDo").onclick = async () => {
-    const r = await store.closePoll(d.id, $("#cpWinner").value || null);
-    if (r.ok) { closeModal(); toast("Poll closed."); reload(); } else toast(r.error || "Failed.");
+// Manager edits poll settings (title, deadline, single/multiple, add-options),
+// can add/remove options (unvoted only), and — if creator — assign a poll admin.
+function openEditPollModal(d, reload) {
+  const dl = deadlineToInputs(d.deadline);
+  const others = (d.participants || []).filter((p) => p.status !== "declined");
+  const admins = new Set((d.admins || []).map(String));
+  modal("Edit poll", `
+    <label style="margin-top:0">Title</label>
+    <input id="epTitle" maxlength="200" value="${esc(d.title)}">
+    <label>Voting deadline (optional)</label>
+    <div class="poll-range"><input type="date" id="epDeadDate" value="${dl.date}"><input type="time" id="epDeadTime" value="${dl.time}"></div>
+    <label class="chk"><input type="checkbox" id="epMulti" ${d.allow_multiple ? "checked" : ""}> Allow multiple answers</label>
+    <label class="chk"><input type="checkbox" id="epAddOpts" ${d.allow_add_options ? "checked" : ""}> Let participants add options</label>
+    <label>Options</label>
+    <div id="epOpts">${d.options.map((o) => `<div class="poll-opt" style="display:flex;align-items:center;gap:8px">
+        <span class="poll-choice-main">${optionMain(d.kind, o)}${o.votes ? ` <span class="exp-meta">· ${o.votes} vote${o.votes === 1 ? "" : "s"} (locked)</span>` : ""}</span>
+        ${!o.votes && !d.parent_poll_id ? `<button class="icon-btn" data-rmopt="${o.id}" title="Remove" style="margin-left:auto">✕</button>` : ""}
+      </div>`).join("")}</div>
+    ${!d.parent_poll_id ? `<button class="btn ghost sm" id="epAddOpt" style="margin-top:6px">＋ Add option</button>` : `<p class="hint" style="margin-top:6px">Runoff options are locked (already voted on).</p>`}
+    ${d.is_mine ? `<hr style="border:none;border-top:1px solid var(--line);margin:14px 0">
+      <label>Poll admins (can also manage this poll)</label>
+      <div class="chips" id="epAdmins">${others.length ? others.map((p) => `<span class="chip${admins.has(String(p.id)) ? " on" : ""}" data-admin="${p.id}">${esc(p.name)}</span>`).join("") : `<span class="exp-meta">No participants to assign.</span>`}</div>` : ""}
+  `, `<button class="btn ghost" data-close>Cancel</button><button class="btn" id="epSave">Save</button>`);
+  const host = $("#modalHost");
+  host.querySelectorAll("[data-rmopt]").forEach((b) => b.onclick = async () => {
+    const r = await store.removePollOption(b.dataset.rmopt); if (r.ok) { toast("Removed."); closeModal(); reload(); } else toast(r.error || "Failed.");
+  });
+  if ($("#epAddOpt")) $("#epAddOpt").onclick = () => { closeModal(); openAddPollOption(d, reload); };
+  host.querySelectorAll("[data-admin]").forEach((c) => c.onclick = async () => {
+    const uid = c.dataset.admin, add = !c.classList.contains("on");
+    const r = await store.setPollAdmin(d.id, uid, add);
+    if (r.ok) { c.classList.toggle("on", add); toast(add ? "Admin added." : "Admin removed."); } else toast(r.error || "Failed.");
+  });
+  $("#epSave").onclick = async () => {
+    const r = await store.updatePoll(d.id, {
+      title: $("#epTitle").value.trim(),
+      deadline: deadlineFromInputs($("#epDeadDate").value, $("#epDeadTime").value),
+      multiple: $("#epMulti").checked, addOptions: $("#epAddOpts").checked,
+    });
+    if (r.ok) { closeModal(); toast("Saved."); reload(); } else toast(r.error || "Couldn't save.");
+  };
+}
+
+// Reopen a tie as a runoff: shows the tied options (read-only), optional new
+// deadline, confirm-only. The original then announces the tie + links the runoff.
+function openRunoffModal(d, winners, reload) {
+  const dl = { date: "", time: "23:59" };
+  modal("Reopen for the tie", `
+    <p style="margin-top:0" class="hint">These options tied. A new runoff poll will be created with only these (locked — they've already been voted on) and the same people. Set an optional deadline and confirm.</p>
+    <div class="poll-opt">${winners.map((o) => `<div class="poll-choice-main" style="padding:4px 0">• ${optionMain(d.kind, o)}${(o.all_day || o.start_at) ? ` <span class="poll-sum">(${rangeSummary(d.kind, o.start_at, o.end_at)})</span>` : ""}</div>`).join("")}</div>
+    <label>Runoff deadline (optional)</label>
+    <div class="poll-range"><input type="date" id="roDate"><input type="time" id="roTime" value="${dl.time}"></div>
+  `, `<button class="btn ghost" data-close>Cancel</button><button class="btn" id="roDo">Create runoff</button>`);
+  $("#roDo").onclick = async () => {
+    const deadline = deadlineFromInputs($("#roDate").value, $("#roTime").value);
+    const r = await store.createRunoff(d.id, deadline);
+    if (r.ok) { closeModal(); toast("Runoff created — the tie is announced here."); reload(); } else toast(r.error || "Failed.");
   };
 }
 
@@ -2017,6 +2106,24 @@ document.querySelectorAll(".nav-item").forEach((b) => b.onclick = () => { view =
 document.querySelectorAll("[data-new]").forEach((b) => b.onclick = () => openLedgerModal(b.dataset.new));
 $("#dataBtn").onclick = () => openBackup();
 
+// Pull fresh data whenever a sidebar tab (or a group/trip) is clicked, then repaint
+// the current view — so switching tabs always shows up-to-date data + badges.
+let _tabRefreshing = false;
+async function tabRefresh() {
+  if (!CLOUD || _tabRefreshing || document.hidden) return;
+  _tabRefreshing = true;
+  // Full refresh (ledgers, expenses, friends, invites, chats, polls) so every tab
+  // shows current data. The view already rendered from cache instantly; this quietly
+  // updates it when the data lands.
+  try { if (store.hydrate) await store.hydrate(); else if (store.refreshInbox) await store.refreshInbox(); }
+  catch (e) {} finally { _tabRefreshing = false; }
+  updateInboxBadge();
+  render();
+}
+document.getElementById("sidebar").addEventListener("click", (e) => {
+  if (e.target.closest(".nav-item, [data-ledger]")) setTimeout(tabRefresh, 0);
+});
+
 function openPeopleModal() {
   const people = store.state.people;
   modal("People", `
@@ -2121,7 +2228,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11b · NEW: Polls (text / dates / date-time) with voting";
+const BUILD = "2026-08-11d · Polls v2 + poll invites in Invitations + refresh data on tab change";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }

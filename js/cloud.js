@@ -344,7 +344,7 @@ class CloudStore {
     if (this.state.you.username) this._propagateSelf(); // refresh my copies for others
   }
   // Counts for the sidebar red-dots.
-  pendingCount() { return (this.state.friendRequests?.length || 0) + (this.state.invitations?.length || 0); }
+  pendingCount() { return (this.state.friendRequests?.length || 0) + (this.state.invitations?.length || 0) + (this.state.polls || []).filter((p) => p.myStatus === "invited").length; }
   pendingApprovalCount() { return this.state.pendingApprovals || 0; }
   // Re-pull just the pending queues (friend requests, invites, approvals) without a
   // full hydrate — used to refresh badges when the tab regains focus / inbox opens.
@@ -454,15 +454,17 @@ class CloudStore {
   pollsPending() {
     const now = Date.now();
     return (this.state.polls || []).filter((p) =>
-      p.myStatus === "invited" && !p.closed && (!p.deadline || new Date(p.deadline).getTime() > now)).length;
+      !p.closed && (!p.deadline || new Date(p.deadline).getTime() > now) &&
+      (p.myStatus === "invited" || (p.myStatus === "accepted" && !p.voted))).length;
   }
   async loadPolls() {
     await this._try("polls", async () => {
       const { data } = await this.sb.rpc("my_polls");
       this.state.polls = (data || []).map((p) => ({
         id: p.id, title: p.title, kind: p.kind, closed: p.closed, deadline: p.deadline,
-        isMine: p.is_mine, myStatus: p.my_status, optionCount: p.option_count,
-        participantCount: p.participant_count, voted: p.voted, winningOptionId: p.winning_option_id,
+        isMine: p.is_mine, canManage: p.can_manage, isRunoff: p.is_runoff,
+        myStatus: p.my_status, optionCount: p.option_count,
+        participantCount: p.participant_count, voted: p.voted,
         createdAt: p.created_at ? new Date(p.created_at).getTime() : 0,
       }));
     });
@@ -513,12 +515,40 @@ class CloudStore {
     await this.loadPolls();
     return { ok: true };
   }
-  async closePoll(pollId, winnerId) {
-    const { data, error } = await this.sb.rpc("close_poll", { p_poll: pollId, p_winner: winnerId || null });
+  async closePoll(pollId) {
+    const { data, error } = await this.sb.rpc("close_poll", { p_poll: pollId });
     if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
     if (Array.isArray(data.paths) && data.paths.length) this._try("poll image cleanup", () => this.sb.storage.from("poll-uploads").remove(data.paths));
     await this.loadPolls();
     return { ok: true };
+  }
+  async updatePoll(pollId, { title, deadline, multiple, addOptions }) {
+    const { data, error } = await this.sb.rpc("update_poll", { p_poll: pollId, p_title: title ?? null, p_deadline: deadline || null, p_multiple: multiple, p_add_options: addOptions });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
+    await this.loadPolls(); return { ok: true };
+  }
+  async setPollAdmin(pollId, userId, add) {
+    const { data, error } = await this.sb.rpc("set_poll_admin", { p_poll: pollId, p_user: userId, p_add: add });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
+    return { ok: true };
+  }
+  async updatePollOption(optionId, patch) {
+    const { data, error } = await this.sb.rpc("update_poll_option", { p_option: optionId, p_patch: patch });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
+    return { ok: true };
+  }
+  async removePollOption(optionId) {
+    const { data, error } = await this.sb.rpc("remove_poll_option", { p_option: optionId });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
+    if (data.path) this._try("poll image cleanup", () => this.sb.storage.from("poll-uploads").remove([data.path]));
+    return { ok: true };
+  }
+  async createRunoff(pollId, deadline) {
+    const { data, error } = await this.sb.rpc("create_runoff", { p_poll: pollId, p_deadline: deadline || null });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
+    this._try("runoff invite email", () => this.sb.functions.invoke("notify-poll", { body: { pollId: data.poll_id, event: "invite" } }));
+    await this.loadPolls();
+    return { ok: true, pollId: data.poll_id };
   }
   async reopenPoll(pollId) {
     const { data, error } = await this.sb.rpc("reopen_poll", { p_poll: pollId });
