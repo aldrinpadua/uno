@@ -436,8 +436,9 @@ async function renderChat(chatId) {
         <h1 class="page-title" style="font-size:20px;margin-top:8px">${c && c.isGroup ? "👥 " + esc(title)
           : (dmOther ? `<span class="prof-link" data-prof="${dmOther.id}">${esc(title)}</span>` : esc(title))}</h1>
         ${c && c.isGroup ? `<p class="page-sub">${(c.members || []).map((m) => `<a class="prof-link" data-prof="${m.id}">${esc(m.name)}</a>`).join(", ")}${c.members && c.members.length ? " · you" : ""}</p>` : ""}</div>
-      <div style="display:flex;gap:8px">${c && c.isGroup ? `<button class="btn ghost sm" id="chatManage">Manage</button>` : ""}<button class="icon-btn" id="chatDelete" title="Delete conversation (only for you)">🗑️</button></div>
+      <div style="display:flex;gap:8px">${c && c.isGroup ? `<button class="btn ghost sm" id="chatManage">Manage</button>` : ""}<button class="icon-btn" id="chatPins" title="Pinned messages">📌</button><button class="icon-btn" id="chatDelete" title="Delete conversation (only for you)">🗑️</button></div>
     </div>
+    <div id="pinBanner"></div>
     <div id="msgScroll" style="max-height:calc(100vh - 280px);overflow-y:auto;padding:4px 0"><div class="exp-meta" style="padding:10px 14px">Loading…</div></div>
     ${disabled
       ? `<div class="disabled-note">🚫 This person is no longer on UNO. You can read past messages, but you can't send new ones.</div>`
@@ -453,6 +454,7 @@ async function renderChat(chatId) {
   wireMobile();
   main.querySelectorAll("[data-prof]").forEach((el) => el.onclick = () => openChatProfile(chatId, el.dataset.prof));
   $("#backMsgs").onclick = () => { view = { type: "messages" }; render(); };
+  if ($("#chatPins")) $("#chatPins").onclick = () => openPinnedModal(chatId);
   if ($("#chatManage")) $("#chatManage").onclick = () => openManageChatModal(chatId);
   $("#chatDelete").onclick = () => confirmDelete("Delete this conversation for you? Others keep theirs, and it comes back if someone messages the chat again.", async () => {
     await store.clearChat(chatId); view = { type: "messages" }; render(); toast("Deleted for you.");
@@ -460,8 +462,31 @@ async function renderChat(chatId) {
 
   let current = [];
   const reload = async () => { current = await store.chatMessages(chatId); if (view.type === "chat" && view.chatId === chatId) paint(current); };
+  // Slim banner of the two most-recent pins; any member can unpin from here or jump to it.
+  const paintPins = (msgs) => {
+    const bar = $("#pinBanner"); if (!bar) return;
+    const pins = msgs.filter((m) => m.pinnedAt && !m.deleted).sort((a, b) => b.pinnedAt - a.pinnedAt);
+    if (!pins.length) { bar.innerHTML = ""; return; }
+    const top = pins.slice(0, 2);
+    bar.innerHTML = `<div class="pin-banner">${top.map((m) => {
+      const s = store.chatSender(chatId, m.sender);
+      return `<div class="pin-item"><span class="pin-ico">📌</span>
+        <span class="pin-txt" data-jump="${m.id}"><b>${esc(s.name)}</b> ${esc(msgPreview(m))}</span>
+        <button class="icon-btn pin-x" data-unpin="${m.id}" title="Unpin">✖</button></div>`;
+    }).join("")}${pins.length > 2 ? `<button class="pin-more" id="pinMore">+${pins.length - 2} more pinned · view all</button>` : ""}</div>`;
+    bar.querySelectorAll("[data-jump]").forEach((el) => el.onclick = () => {
+      const row = document.getElementById("msg-" + el.dataset.jump);
+      if (row) { row.scrollIntoView({ behavior: "smooth", block: "center" }); row.classList.add("msg-flash"); setTimeout(() => row.classList.remove("msg-flash"), 1500); }
+    });
+    bar.querySelectorAll("[data-unpin]").forEach((el) => el.onclick = async () => {
+      const r = await store.pinMessage(+el.dataset.unpin, false);
+      if (r.ok) { reload(); toast("Unpinned."); } else toast(r.error || "Couldn't unpin.");
+    });
+    if ($("#pinMore")) $("#pinMore").onclick = () => openPinnedModal(chatId);
+  };
   const paint = (msgs) => {
     const box = $("#msgScroll"); if (!box) return;
+    paintPins(msgs);
     if (!msgs.length) { box.innerHTML = `<div class="exp-meta" style="padding:10px 14px">No messages yet — say hi 👋</div>`; return; }
     box.innerHTML = msgs.map((m) => {
       const s = store.chatSender(chatId, m.sender);
@@ -470,12 +495,14 @@ async function renderChat(chatId) {
       const atts = (m.attachments || []).map((a) => (a.type && a.type.startsWith("image/"))
         ? `<a href="${esc(a.url)}" target="_blank" rel="noopener"><img src="${esc(a.url)}" class="msg-img" loading="lazy"></a>`
         : `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="msg-file">📎 <span class="fn">${esc(a.name || "file")}</span>${a.size ? `<span class="fsz">${fmtBytes(a.size)}</span>` : ""}</a>`).join("");
+      const pinMark = (m.pinnedAt && !m.deleted) ? `<span class="msg-pinned" title="Pinned">📌</span>` : "";
       const inner = m.deleted
         ? `<div style="opacity:.6;font-style:italic">message deleted</div>`
-        : `${atts}${m.body ? `<div>${renderMsgBody(m.body, m.mentions)}</div>` : ""}<div class="msg-time">${time}${m.editedAt ? " · edited" : ""}</div>`;
-      const tap = (m.mine && !m.deleted) ? ` data-msg="${m.id}" style="cursor:pointer"` : "";
+        : `${atts}${m.body ? `<div>${renderMsgBody(m.body, m.mentions)}</div>` : ""}<div class="msg-time">${pinMark}${time}${m.editedAt ? " · edited" : ""}</div>`;
+      // Any member can tap a (non-deleted) message to pin it; owners also get edit/delete.
+      const tap = !m.deleted ? ` data-msg="${m.id}" style="cursor:pointer"` : "";
       const avTap = (!m.mine && m.sender) ? ` class="avatar sm prof-link" data-prof="${m.sender}"` : ` class="avatar sm"`;
-      return `<div class="msg-row ${m.mine ? "mine" : ""}">
+      return `<div class="msg-row ${m.mine ? "mine" : ""}" id="msg-${m.id}">
         ${m.mine ? "" : `<div${avTap} style="background:${avColor(s)}">${esc(initials(s.name))}</div>`}
         <div class="msg-bubble ${m.mine ? "mine" : ""}"${tap}>${who}${inner}</div>
       </div>`;
@@ -624,20 +651,70 @@ function openNewChatModal() {
   };
 }
 
+// Short, one-line preview of a message for the pin banner / pinned list.
+function msgPreview(m) {
+  if (m.deleted) return "message deleted";
+  const t = (m.body || "").replace(/\s+/g, " ").trim();
+  if (t) return t.length > 70 ? t.slice(0, 70) + "…" : t;
+  if (m.attachments && m.attachments.length) return "📎 " + (m.attachments[0].name || "attachment");
+  return "(no text)";
+}
+
 function openMessageActions(msg, reload) {
-  modal("Your message", `
-    <textarea id="emBody" rows="3">${esc(msg.body)}</textarea>
-    <div class="hint" style="margin-top:6px">Edit your message, or delete it for everyone in the chat.</div>
-  `, `<button class="btn danger" id="emDel" style="margin-right:auto">Delete</button><button class="btn ghost" data-close>Cancel</button><button class="btn" id="emSave">Save edit</button>`);
-  $("#emSave").onclick = async () => {
-    const v = $("#emBody").value.trim();
-    if (!v) return toast("Message can't be empty — use Delete instead.");
-    const r = await store.editMessage(msg.id, v); closeModal();
-    if (r.ok) { reload(); toast("Edited."); } else toast(r.error || "Couldn't edit.");
-  };
-  $("#emDel").onclick = () => { closeModal(); confirmDelete("Delete this message for everyone in the chat?", async () => {
-    const r = await store.deleteMessage(msg.id); if (r.ok) { reload(); toast("Deleted."); } else toast(r.error || "Couldn't delete.");
-  }, { confirmLabel: "Delete" }); };
+  const isPinned = !!msg.pinnedAt;
+  const pinRow = `<div style="margin-top:12px"><button class="btn ghost sm" id="emPin">${isPinned ? "📌 Unpin from chat" : "📌 Pin to chat"}</button></div>`;
+  const wirePin = () => { $("#emPin").onclick = async () => {
+    const r = await store.pinMessage(msg.id, !isPinned); closeModal();
+    if (r.ok) { reload(); toast(isPinned ? "Unpinned." : "Pinned."); } else toast(r.error || "Couldn't pin.");
+  }; };
+
+  if (msg.mine) {
+    modal("Your message", `
+      <textarea id="emBody" rows="3">${esc(msg.body)}</textarea>
+      <div class="hint" style="margin-top:6px">Edit your message, pin it, or delete it for everyone in the chat.</div>
+      ${pinRow}
+    `, `<button class="btn danger" id="emDel" style="margin-right:auto">Delete</button><button class="btn ghost" data-close>Cancel</button><button class="btn" id="emSave">Save edit</button>`);
+    $("#emSave").onclick = async () => {
+      const v = $("#emBody").value.trim();
+      if (!v) return toast("Message can't be empty — use Delete instead.");
+      const r = await store.editMessage(msg.id, v); closeModal();
+      if (r.ok) { reload(); toast("Edited."); } else toast(r.error || "Couldn't edit.");
+    };
+    $("#emDel").onclick = () => { closeModal(); confirmDelete("Delete this message for everyone in the chat?", async () => {
+      const r = await store.deleteMessage(msg.id); if (r.ok) { reload(); toast("Deleted."); } else toast(r.error || "Couldn't delete.");
+    }, { confirmLabel: "Delete" }); };
+  } else {
+    const s = store.chatSender(msg.chatId, msg.sender);
+    modal("Message", `
+      <div class="mail-preview"><b>${esc(s.name)}</b><div style="margin-top:4px">${msg.body ? renderMsgBody(msg.body, msg.mentions) : esc(msgPreview(msg))}</div></div>
+      <div class="hint" style="margin-top:6px">Pin this message to the top of the chat for everyone.</div>
+      ${pinRow}
+    `, `<button class="btn" data-close>Close</button>`);
+  }
+  wirePin();
+}
+
+// Full list of a chat's pinned messages (works for every chat type — DMs included).
+async function openPinnedModal(chatId) {
+  modal("📌 Pinned messages", `<div id="pinListBody"><div class="exp-meta">Loading…</div></div>`, `<button class="btn" data-close>Close</button>`);
+  const msgs = await store.chatMessages(chatId);
+  const pins = msgs.filter((m) => m.pinnedAt && !m.deleted).sort((a, b) => b.pinnedAt - a.pinnedAt);
+  const bodyEl = $("#pinListBody"); if (!bodyEl) return;
+  if (!pins.length) { bodyEl.innerHTML = `<div class="exp-meta">No pinned messages yet. Tap any message → “Pin to chat” to add one (up to 15).</div>`; return; }
+  bodyEl.innerHTML = `<div class="card" style="padding:6px 0">${pins.map((m) => {
+    const s = store.chatSender(chatId, m.sender);
+    const when = new Date(m.pinnedAt).toLocaleDateString([], { month: "short", day: "numeric" });
+    return `<div class="bal-row"><div class="exp-cat">📌</div>
+      <div class="grow" style="min-width:0"><b>${esc(s.name)}</b> <span class="exp-meta">pinned ${when}</span>
+        <div style="margin-top:2px;overflow-wrap:anywhere">${esc(msgPreview(m))}</div></div>
+      <button class="btn ghost sm" data-unpin="${m.id}">Unpin</button></div>`;
+  }).join("")}</div><div class="hint" style="margin-top:8px">${pins.length}/15 pinned. Any member can pin or unpin.</div>`;
+  bodyEl.querySelectorAll("[data-unpin]").forEach((el) => el.onclick = async () => {
+    el.disabled = true;
+    const r = await store.pinMessage(+el.dataset.unpin, false);
+    if (r.ok) { toast("Unpinned."); closeModal(); if (view.type === "chat" && view.chatId === chatId) render(); }
+    else { el.disabled = false; toast(r.error || "Couldn't unpin."); }
+  });
 }
 
 function openManageChatModal(chatId) {
@@ -2745,7 +2822,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11p · friend avatar colors + custom color picker + bigger palette · tidy sidebar (icons on headers, 5+expand) · mobile members fix · burger badge";
+const BUILD = "2026-08-11q · pinned messages (banner + pinned list, any member, cap 15) + build 11p UI/avatar fixes";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
