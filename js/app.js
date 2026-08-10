@@ -66,6 +66,13 @@ function childrenOf(l) { return store.ledgers().filter((x) => x.parentId === l.i
 // Where to land when opening a ledger: trips open on their Details tab, everything
 // else on Expenses.
 function landTab(id) { const l = store.ledgerById(id); return l && l.kind === "trip" ? "details" : "expenses"; }
+// Label for a "← back" button, based on where you navigated from.
+function fromLabel(from) {
+  if (!from) return "Back";
+  if (from.type === "dashboard") return "Dashboard";
+  if (from.type === "friend") { const m = store.memberById(from.friendId); return m ? m.name : "Back"; }
+  return "Back";
+}
 function rolledExpenses(l) {
   if (l.kind === "group") {
     const kids = childrenOf(l);
@@ -350,7 +357,7 @@ function renderDashboard() {
       ? `<button class="list-more" id="dashMore" style="padding:12px 14px">${dashExpanded ? "▲ Show less" : `▾ Show all ${filtered.length}`}</button>`
       : "";
     list.innerHTML = rows + moreBtn;
-    list.querySelectorAll("[data-ledger]").forEach((b) => b.onclick = () => { view = { type: "ledger", ledgerId: b.dataset.ledger, tab: landTab(b.dataset.ledger) }; render(); });
+    list.querySelectorAll("[data-ledger]").forEach((b) => b.onclick = () => { view = { type: "ledger", ledgerId: b.dataset.ledger, tab: landTab(b.dataset.ledger), from: { type: "dashboard" } }; render(); });
     list.querySelectorAll("[data-fav]").forEach((s) => s.onclick = async (e) => { e.stopPropagation(); await store.toggleFavorite(s.dataset.fav); renderDashboard(); });
     if ($("#dashMore")) $("#dashMore").onclick = () => { dashExpanded = !dashExpanded; renderDashboard(); };
   }
@@ -1385,7 +1392,7 @@ function renderFriendDetail(friendId) {
       <div class="exp-amt"><div class="${n >= 0 ? "pos" : "neg"}">${n === 0 ? "settled" : (n > 0 ? "owes you " : "you owe ") + formatMoney(Math.abs(n), l.baseCurrency)}</div></div>
       ${n !== 0 ? `<button class="btn ghost sm" data-settle="${l.id}">Settle up</button>` : ""}`;
     sl.appendChild(row);
-    row.querySelector("[data-open]").onclick = () => { view = { type: "ledger", ledgerId: l.id, tab: landTab(l.id) }; render(); };
+    row.querySelector("[data-open]").onclick = () => { view = { type: "ledger", ledgerId: l.id, tab: landTab(l.id), from: { type: "friend", friendId } }; render(); };
     const sb = row.querySelector("[data-settle]");
     if (sb) sb.onclick = () => {
       const from = n > 0 ? friendId : "you", to = n > 0 ? "you" : friendId;
@@ -1476,7 +1483,8 @@ function renderLedger() {
   main.innerHTML = `
     ${mobileBar()}
     <div class="page-head">
-      <div>
+      <div style="max-width:100%">
+        ${view.from ? `<button class="link-btn" id="ledgerBack" style="padding-left:0">← ${esc(fromLabel(view.from))}</button>` : ""}
         <h1 class="page-title">${kindIcon[l.kind]} ${esc(ledgerDisplayName(l))}</h1>
         <p class="page-sub">${kindLabel[l.kind]}${parent ? " in " + esc(parent.name) : ""} · base currency ${l.baseCurrency} · ${rolledMemberIds(l).length} people${l.kind === "group" && nKids ? ` · includes ${nKids} trip${nKids === 1 ? "" : "s"}` : ""}</p>
       </div>
@@ -1486,6 +1494,7 @@ function renderLedger() {
     <div id="tabBody"></div>`;
 
   $("#addExp").onclick = () => openExpenseModal(l.id);
+  if ($("#ledgerBack")) $("#ledgerBack").onclick = () => { view = view.from; render(); };
   main.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => { view.tab = b.dataset.tab; renderLedger(); });
 
   const body = $("#tabBody");
@@ -3057,7 +3066,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11z · favorites for friends/chats/polls · Friends count pill · desktop emoji picker · numeric-input guard";
+const BUILD = "2026-08-12a · back button on ledgers opened from a friend profile or the dashboard";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
