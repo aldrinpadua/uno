@@ -56,22 +56,22 @@ body {
 .nav-item:hover, .nav-list button:hover { background: var(--panel); }
 .nav-item.active, .nav-list button.active { background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line); }
 /* Divider above each section so "Groups"/"Trips" clearly start a new block */
-.nav-section { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
-.nav-section-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 2px 6px 8px;
-}
-/* the title itself is a subtle brand-tinted pill, uppercased, so it stands out
-   as a section label while still blending with the dark theme */
-.nav-section-head > span {
+.nav-section { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 8px; }
+.nav-section-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 6px; }
+/* clickable section title that collapses/expands its list */
+.sec-title {
   display: inline-flex; align-items: center; gap: 6px;
-  font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .8px;
-  color: var(--text);
-  padding: 4px 11px; border-radius: 999px;
-  background: var(--panel-2);
-  background: color-mix(in srgb, var(--brand) 14%, var(--panel-2));
-  border: 1px solid var(--line);
-  border-color: color-mix(in srgb, var(--brand) 26%, var(--line));
+  font-size: 13px; font-weight: 700; letter-spacing: .2px; color: var(--text);
+  cursor: pointer; user-select: none; flex: 1;
+}
+.sec-title:hover { color: var(--brand); }
+.sec-chev { font-size: 10px; color: var(--muted); width: 10px; display: inline-block; transition: color .15s; }
+.sec-title:hover .sec-chev { color: var(--brand); }
+/* count of items in the section — signals it's expandable and how much is inside */
+.sec-count {
+  margin-left: 4px; font-size: 11px; font-weight: 700; line-height: 1;
+  color: var(--muted); background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 999px; padding: 2px 7px; min-width: 18px; text-align: center;
 }
 .nav-list { display: flex; flex-direction: column; gap: 2px; }
 .nav-list .empty { color: var(--muted); font-size: 12px; padding: 4px 10px; }
@@ -273,6 +273,11 @@ input[type="date"]::-webkit-datetime-edit { padding: 0; line-height: normal; }
   /* bigger, easier-to-tap sidebar items */
   .nav-item, .nav-list button { padding: 12px 12px; font-size: 15px; }
   .nav-list button { padding-left: 26px; }  /* keep the indent on mobile too */
+  /* section headers are the collapse toggles — make them a comfortable tap target */
+  .nav-section-head { padding: 10px 10px 8px; }
+  .sec-title { font-size: 15px; padding: 4px 0; }
+  .sec-chev { font-size: 12px; width: 12px; }
+  .sec-count { font-size: 12px; padding: 3px 8px; }
   /* pin the People / Backup / Sign out row to the bottom, always visible */
   .sidebar-foot { flex-wrap: wrap; gap: 6px; padding-top: 12px; position: sticky; bottom: 0; background: var(--bg-2); padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px)); }
   .link-btn { font-size: 14px; padding: 11px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); flex: 1; text-align: center; }
@@ -315,6 +320,12 @@ input[type="date"]::-webkit-datetime-edit { padding: 0; line-height: normal; }
 .member-actions { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; }
 .list-more { width: 100%; text-align: left; color: var(--muted); background: none; border: none; cursor: pointer; padding: 8px 12px; font-size: 13px; }
 .list-more:hover { color: var(--text); }
+/* dashboard segmented filter (All / Groups / Trips / Friends) */
+.seg { display: flex; gap: 8px; flex-wrap: wrap; }
+.seg-btn { background: var(--panel); border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 6px 13px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.seg-btn:hover { color: var(--text); }
+.seg-btn.on { background: var(--panel-2); color: var(--text); border-color: var(--brand); font-weight: 600; }
+.seg-n { opacity: .65; font-size: 12px; margin-left: 3px; }
 /* rainbow custom-color swatch in the profile picker */
 .av-swatch.av-custom { display: inline-block; border: 1px solid var(--line); }
 
