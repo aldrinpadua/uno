@@ -189,9 +189,34 @@ function renderSidebar() {
   const trips = orderByFav(store.ledgers().filter((l) => l.kind === "trip"));
   fillList("#groupList", groups, "group");
   fillList("#tripList", trips, "trip");
+  applySectionCollapse();
 
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view.type || (view.type === "friend" && b.dataset.view === "friends")));
   updateInboxBadge();
+}
+
+// Groups/Trips start collapsed for an uncluttered sidebar; clicking the header
+// reveals the list (first 3 + "Show more"). State lives for the session.
+const sectionCollapsed = { group: true, trip: true };
+function applySectionCollapse() {
+  document.querySelectorAll(".nav-section-head[data-section]").forEach((head) => {
+    const key = head.dataset.section;
+    const collapsed = !!sectionCollapsed[key];
+    const list = head.parentElement.querySelector(".nav-list");
+    const chev = head.querySelector(".sec-chev");
+    if (chev) chev.textContent = collapsed ? "▸" : "▾";
+    if (list) list.style.display = collapsed ? "none" : "";
+    const title = head.querySelector(".sec-title");
+    // Count badge — shows how many items are inside, so it's clear the section
+    // expands (and how much is hidden when collapsed).
+    const count = list ? (+list.dataset.count || 0) : 0;
+    let badge = head.querySelector(".sec-count");
+    if (count > 0) {
+      if (!badge) { badge = document.createElement("span"); badge.className = "sec-count"; title.appendChild(badge); }
+      badge.textContent = count;
+    } else if (badge) { badge.remove(); }
+    if (title) title.onclick = () => { sectionCollapsed[key] = !sectionCollapsed[key]; applySectionCollapse(); };
+  });
 }
 
 // The current user's favorite ledger ids, in the order they starred them.
@@ -210,6 +235,7 @@ const LIST_CAP = 3;
 const listExpanded = { group: false, trip: false };
 function fillList(sel, ledgers, key) {
   const el = $(sel);
+  el.dataset.count = ledgers.length;   // true total, for the section's count badge
   if (!ledgers.length) { el.innerHTML = `<div class="empty">none yet</div>`; return; }
   const expanded = !!listExpanded[key];
   const shown = expanded ? ledgers : ledgers.slice(0, LIST_CAP);
@@ -237,6 +263,10 @@ function fillList(sel, ledgers, key) {
 }
 
 // ---------- dashboard ----------
+// Dashboard list de-clutter: filter by type, favorites first, capped with "Show all".
+let dashFilter = "all";       // all | group | trip | individual
+let dashExpanded = false;
+const DASH_CAP = 6;
 function renderDashboard() {
   const main = $("#main");
   const ledgers = store.ledgers();
@@ -261,31 +291,56 @@ function renderDashboard() {
       ${(store.state.invitations || []).map((i) => `<div class="bal-row"><div class="exp-cat">${kindIcon[i.kind] || "👥"}</div><div class="grow"><b>${esc(i.name)}</b> <span class="exp-meta">${kindLabel[i.kind] || "Group"} · invited by ${esc(i.inviter)}</span></div><button class="btn sm" data-iacc="${i.ledgerId}">Accept</button> <button class="btn ghost sm" data-idec="${i.ledgerId}">Decline</button></div>`).join("")}
     </div>` : ""}
     <h3 style="margin:26px 0 10px">Your groups, trips & friends</h3>
-    <div id="dashList"></div>`;
+    <div id="dashFilterBar" class="seg"></div>
+    <div id="dashList" style="margin-top:12px"></div>`;
 
   main.querySelectorAll("[data-iacc]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.acceptInvitation(b.dataset.iacc); if (r.ok) { toast("Joined."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
   main.querySelectorAll("[data-idec]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.declineInvitation(b.dataset.idec); if (r.ok) { toast("Declined."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
   const list = $("#dashList");
+  const bar = $("#dashFilterBar");
   if (!ledgers.length) {
+    if (bar) bar.style.display = "none";
     list.innerHTML = emptyState("🧳", "Nothing here yet", "Create a group for your friend circle, a trip for your next getaway, or a 1:1 ledger with one friend.",
       `<div class="row" style="max-width:420px;margin:14px auto 0">
         <button class="btn" data-new="trip">🧳 New trip</button>
         <button class="btn ghost" data-new="group">👨‍👩‍👧 New group</button>
       </div>`);
   } else {
-    list.innerHTML = ledgers.map((l) => {
+    // Filter chips (only for the types you actually have), with live counts.
+    const counts = { all: ledgers.length, group: 0, trip: 0, individual: 0 };
+    ledgers.forEach((l) => { counts[l.kind] = (counts[l.kind] || 0) + 1; });
+    const chipDefs = [["all", "All"], ["group", "Groups"], ["trip", "Trips"], ["individual", "Friends"]];
+    if (!counts[dashFilter]) dashFilter = "all"; // guard: type emptied out
+    if (bar) {
+      bar.style.display = "";
+      bar.innerHTML = chipDefs.filter(([k]) => k === "all" || counts[k]).map(([k, label]) =>
+        `<button class="seg-btn ${dashFilter === k ? "on" : ""}" data-filter="${k}">${label} <span class="seg-n">${counts[k]}</span></button>`).join("");
+      bar.querySelectorAll("[data-filter]").forEach((b) => b.onclick = () => { dashFilter = b.dataset.filter; dashExpanded = false; renderDashboard(); });
+    }
+
+    const filtered = orderByFav(dashFilter === "all" ? ledgers : ledgers.filter((l) => l.kind === dashFilter));
+    const shown = dashExpanded ? filtered : filtered.slice(0, DASH_CAP);
+    const rows = shown.map((l) => {
       const { base } = computeBalances(rolledExpenses(l), l.baseCurrency);
       const n = base.get("you") || 0;
       const count = rolledExpenses(l).filter((e) => !e.settlement).length;
       const parent = l.parentId ? store.ledgerById(l.parentId) : null;
+      const fav = isFav(l.id);
       return `<div class="exp-row" data-ledger="${l.id}" style="cursor:pointer">
         <div class="exp-cat">${kindIcon[l.kind]}</div>
         <div class="exp-main"><div class="exp-desc">${esc(ledgerDisplayName(l))}${parent ? ` <span class="tag">in ${esc(parent.name)}</span>` : ""}</div>
           <div class="exp-meta">${kindLabel[l.kind]} · ${rolledMemberIds(l).length} people · ${count} expense${count === 1 ? "" : "s"} · ${l.baseCurrency}</div></div>
         <div class="exp-amt"><div class="${n >= 0 ? "pos" : "neg"}">${n === 0 ? "settled" : (n > 0 ? "you're owed " : "you owe ") + formatMoney(Math.abs(n), l.baseCurrency)}</div></div>
+        <span class="fav-star${fav ? " on" : ""}" data-fav="${l.id}" title="${fav ? "Remove from favorites" : "Add to favorites"}">${fav ? "★" : "☆"}</span>
       </div>`;
     }).join("");
+    const moreBtn = filtered.length > DASH_CAP
+      ? `<button class="list-more" id="dashMore" style="padding:12px 14px">${dashExpanded ? "▲ Show less" : `▾ Show all ${filtered.length}`}</button>`
+      : "";
+    list.innerHTML = rows + moreBtn;
     list.querySelectorAll("[data-ledger]").forEach((b) => b.onclick = () => { view = { type: "ledger", ledgerId: b.dataset.ledger, tab: landTab(b.dataset.ledger) }; render(); });
+    list.querySelectorAll("[data-fav]").forEach((s) => s.onclick = async (e) => { e.stopPropagation(); await store.toggleFavorite(s.dataset.fav); renderDashboard(); });
+    if ($("#dashMore")) $("#dashMore").onclick = () => { dashExpanded = !dashExpanded; renderDashboard(); };
   }
   main.querySelectorAll("[data-new]").forEach((b) => b.onclick = () => openLedgerModal(b.dataset.new));
   $("#quickAdd").onclick = () => { if (!ledgers.length) return toast("Create a trip or group first."); openExpenseModal(ledgers[0].id); };
@@ -2854,7 +2909,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11v · \"Groups\"/\"Trips\" headers as brand-tinted uppercase pills (divider kept, stripe dropped)";
+const BUILD = "2026-08-11w · Groups/Trips collapse + count badge · dashboard filter (All/Groups/Trips/Friends) favorites-first, capped · mobile-tuned";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
