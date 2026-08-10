@@ -1039,6 +1039,13 @@ class CloudStore {
     return { ok: true };
   }
 
+  // Owner hands ownership of a group/trip to another active member.
+  async transferOwnership(ledgerId, userId) {
+    const { data, error } = await this.sb.rpc("transfer_ownership", { p_ledger: ledgerId, p_user: userId });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Couldn't transfer." };
+    await this.hydrate(); return { ok: true };
+  }
+
   // Admin cancels a pending invitation (removes the not-yet-accepted member row).
   async cancelInvite(ledgerId, ref) {
     const l = this.ledgerById(ledgerId);
