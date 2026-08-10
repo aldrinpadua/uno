@@ -223,11 +223,23 @@ function applySectionCollapse() {
 function favIds() { return (store.state.you && Array.isArray(store.state.you.favorites)) ? store.state.you.favorites : []; }
 function isFav(id) { return favIds().includes(id); }
 // Float favorites to the top (in starred order); everything else keeps its order
-// (Array.sort is stable, so non-favorites don't get reshuffled).
-function orderByFav(ledgers) {
+// (Array.sort is stable, so non-favorites don't get reshuffled). Works for any list
+// — pass a getId so friends/chats/polls can reuse it, not just ledgers.
+function sortFav(items, getId) {
   const fav = favIds();
-  const rank = (l) => { const i = fav.indexOf(l.id); return i < 0 ? Infinity : i; };
-  return ledgers.slice().sort((a, b) => rank(a) - rank(b));
+  const rank = (x) => { const i = fav.indexOf(getId(x)); return i < 0 ? Infinity : i; };
+  return items.slice().sort((a, b) => rank(a) - rank(b));
+}
+function orderByFav(ledgers) { return sortFav(ledgers, (l) => l.id); }
+// Star toggle markup + a shared click handler that re-renders the given view.
+function favStar(id) {
+  const f = isFav(id);
+  return `<span class="fav-star${f ? " on" : ""}" data-fav="${id}" title="${f ? "Remove from favorites" : "Add to favorites"}">${f ? "★" : "☆"}</span>`;
+}
+function wireFavStars(rootSel, rerender) {
+  document.querySelectorAll(`${rootSel} [data-fav]`).forEach((s) => s.onclick = async (e) => {
+    e.stopPropagation(); await store.toggleFavorite(s.dataset.fav); rerender();
+  });
 }
 
 // How many of each sidebar list are shown before "Show more" (keeps the nav tidy).
@@ -381,26 +393,18 @@ function renderFriends() {
   const main = $("#main");
   const people = (CLOUD ? store.friends() : store.state.people).slice();
   const rows = people.map((m) => ({ m, net: friendNet(m.id) })).sort((a, b) => sumAbs(b.net) - sumAbs(a.net));
-  const owed = {}, owe = {};
-  rows.forEach((r) => Object.entries(r.net).forEach(([c, v]) => { if (v > 0) owed[c] = (owed[c] || 0) + v; else if (v < 0) owe[c] = (owe[c] || 0) + v; }));
-  const fmtSum = (o) => Object.keys(o).length ? Object.entries(o).map(([c, v]) => formatMoney(Math.abs(v), c)).join(" · ") : formatMoney(0);
   const reqs = CLOUD ? (store.state.friendRequests || []) : [];
 
   main.innerHTML = `
     ${mobileBar()}
     <div class="page-head">
-      <div><h1 class="page-title">🧑‍🤝‍🧑 Friends</h1><p class="page-sub">People you've added and accepted.</p></div>
+      <div><h1 class="page-title">🧑‍🤝‍🧑 Friends ${people.length ? `<span class="count-pill">${people.length}</span>` : ""}</h1><p class="page-sub">People you've added and accepted.</p></div>
       ${CLOUD ? '<div style="display:flex;gap:8px"><button class="btn ghost" id="myLinkBtn">🔗 My link</button><button class="btn" id="addFriendBtn">＋ Add friend</button></div>' : '<button class="btn" data-new="individual">＋ Add friend</button>'}
     </div>
     ${reqs.length ? `<div class="card" style="margin-top:14px;padding:6px 0">
       <div class="exp-meta" style="padding:6px 14px;font-weight:700;color:var(--amber)">Friend request${reqs.length === 1 ? "" : "s"}</div>
       ${reqs.map((r) => `<div class="bal-row">${avatarEl(r)}<div class="grow"><b>${esc(r.name)}</b>${r.username ? ` <span class="exp-meta">@${esc(r.username)}</span>` : ""} <span class="exp-meta">wants to be friends</span></div><button class="btn sm" data-facc="${r.id}">Accept</button> <button class="btn ghost sm" data-fdec="${r.id}">Decline</button></div>`).join("")}
     </div>` : ""}
-    <div class="grid cards-3" style="margin-top:14px">
-      <div class="card stat"><div class="label">You are owed</div><div class="value pos">${fmtSum(owed)}</div></div>
-      <div class="card stat"><div class="label">You owe</div><div class="value neg">${fmtSum(owe)}</div></div>
-      <div class="card stat"><div class="label">Friends</div><div class="value">${people.length}</div></div>
-    </div>
     ${people.length ? searchBar("friendSearch", "Search friends by name or @username…") : ""}
     <div style="margin-top:14px" id="friendList"></div>`;
   if ($("#addFriendBtn")) $("#addFriendBtn").onclick = () => openAddFriendModal();
@@ -412,7 +416,7 @@ function renderFriends() {
   if (!people.length) {
     list.innerHTML = emptyState("🧑‍🤝‍🧑", "No friends yet", CLOUD ? "Add a friend by @username or email — they'll get a request to accept. Or share your link." : "Add people to your groups and trips and they'll show up here.");
   } else {
-    list.innerHTML = rows.map(({ m, net }) => {
+    list.innerHTML = sortFav(rows, (r) => r.m.id).map(({ m, net }) => {
       const pending = CLOUD && !m.userId && m.email;
       const inactive = CLOUD && m.active === false; // revoked / no longer on UNO
       const nShared = sharedLedgers(m.id).length;
@@ -424,10 +428,12 @@ function renderFriends() {
         </div>
         <div class="exp-amt"><div>${netToStr(net)}</div></div>
         ${CLOUD && m.userId ? `<button class="icon-btn" data-dm="${m.userId}" title="Message">💬</button>` : ""}
+        ${favStar(m.id)}
       </div>`;
     }).join("");
     list.querySelectorAll("[data-friend]").forEach((b) => b.onclick = () => { view = { type: "friend", friendId: b.dataset.friend }; render(); });
     list.querySelectorAll("[data-dm]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); openDm(b.dataset.dm); });
+    wireFavStars("#friendList", renderFriends);
     wireSearch("friendSearch", "#friendList", ".exp-row");
   }
   main.querySelectorAll("[data-new]").forEach((b) => b.onclick = () => openLedgerModal(b.dataset.new));
@@ -503,14 +509,16 @@ function renderMessages(skipRefresh) {
   $("#newChatBtn").onclick = () => openNewChatModal();
   const list = $("#chatList");
   if (!chats.length) { list.innerHTML = emptyState("💬", "No chats yet", "Start a chat with a friend or a group. You can also tap the 💬 next to anyone in Friends or a group's Members."); }
-  else list.innerHTML = chats.map((c) => `
+  else list.innerHTML = sortFav(chats, (c) => c.id).map((c) => `
     <div class="exp-row" data-chat="${c.id}" style="cursor:pointer${c.disabled ? ";opacity:.6" : ""}">
       ${chatAvatar(c)}
       <div class="exp-main"><div class="exp-desc">${esc(store.chatTitle(c))}${c.isGroup ? ` <span class="exp-meta">· ${(c.members || []).length + 1} people</span>` : ""}${c.disabled ? ` <span class="exp-meta">· 🚫 unavailable</span>` : ""}</div>
         <div class="exp-meta" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60vw">${c.lastBody ? esc(c.lastBody) : "No messages yet"}</div></div>
       ${c.unread ? `<span class="nav-dot" style="margin-left:0">${c.unread}</span>` : ""}
+      ${favStar(c.id)}
     </div>`).join("");
   list.querySelectorAll("[data-chat]").forEach((el) => el.onclick = () => { view = { type: "chat", chatId: el.dataset.chat }; render(); });
+  wireFavStars("#chatList", () => renderMessages(true));
   wireSearch("chatSearch", "#chatList", ".exp-row");
   // Refresh from the server ONCE per entry to this view, then re-render with the
   // fresh list. skipRefresh=true on that second pass so we don't loop forever.
@@ -979,7 +987,7 @@ function renderPolls(skipRefresh) {
   $("#newPollBtn").onclick = () => openNewPollModal();
   const list = $("#pollList");
   if (!polls.length) { list.innerHTML = emptyState("📊", "No polls yet", "Create a poll to pick trip dates, plans, or anything your group needs to decide."); }
-  else list.innerHTML = polls.map((p) => {
+  else list.innerHTML = sortFav(polls, (p) => p.id).map((p) => {
     const ended = p.deadline && new Date(p.deadline).getTime() < Date.now();
     const status = p.closed ? "🔒 closed" : (ended ? "⌛ voting ended" : "🟢 open");
     const pending = !p.closed && !ended && (p.myStatus === "invited" || (p.myStatus === "accepted" && !p.voted));
@@ -987,9 +995,11 @@ function renderPolls(skipRefresh) {
       <div class="avatar" style="background:#7b5cff">${POLL_ICON[p.kind] || "📊"}</div>
       <div class="exp-main"><div class="exp-desc">${esc(p.title)}${p.isRunoff ? ` <span class="tag">runoff</span>` : ""}${pending ? ` <span class="nav-dot" style="margin-left:0">${p.myStatus === "invited" ? "new" : "vote"}</span>` : ""}</div>
         <div class="exp-meta">${status} · ${p.optionCount} option${p.optionCount === 1 ? "" : "s"} · ${p.participantCount + 1} people${p.isMine ? " · yours" : (p.voted ? " · voted" : "")}</div></div>
+      ${favStar(p.id)}
     </div>`;
   }).join("");
   list.querySelectorAll("[data-poll]").forEach((el) => el.onclick = () => { view = { type: "poll", pollId: el.dataset.poll }; render(); });
+  wireFavStars("#pollList", () => renderPolls(true));
   wireSearch("pollSearch", "#pollList", ".exp-row");
   if (!skipRefresh && store.loadPolls) {
     const sig = () => JSON.stringify(store.polls().map((p) => [p.id, p.myStatus, p.voted, p.closed, p.optionCount]));
@@ -2819,6 +2829,115 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// ==================== EMOJI PICKER (desktop only) ====================
+// Phones/tablets already have an emoji key on their keyboard, so we only add an
+// in-app picker on desktop (fine pointer + wide screen). A 😊 button appears at the
+// right edge of whatever text field you focus; clicking it opens a categorized grid
+// that inserts the emoji at your cursor and fires an input event (so search boxes,
+// @-mentions, etc. still react).
+const EMOJI_CATS = [
+  { tab: "😀", name: "Smileys", list: "😀 😃 😄 😁 😆 😅 😂 🤣 🥲 😊 🙂 🙃 😉 😍 🥰 😘 😗 😙 😚 😋 😛 😜 🤪 😝 🤗 🤔 🤨 😐 😑 😶 🙄 😏 😴 😌 😔 😪 😮 😯 😲 😳 🥺 😢 😭 😤 😠 😡 🤯 😱 😨 😰 😥 😓 🤭 🤫 🫡 😎 🤩 🥳 😇 🤠 🥸".split(" ") },
+  { tab: "👍", name: "Gestures", list: "👍 👎 👏 🙌 👐 🤝 🙏 ✌️ 🤞 🤟 🤙 💪 👋 🤚 ✋ 🖐️ 👊 🤛 🤜 🫶 🫰 ☝️ 👆 👇 👈 👉 👌 🤌 🤏 ✍️ 🫵".split(" ") },
+  { tab: "❤️", name: "Hearts", list: "❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💕 💞 💓 💗 💖 💘 💝 💟 ❣️ 💔 ❤️‍🔥 💌 😻".split(" ") },
+  { tab: "🎉", name: "Fun", list: "🎉 🎊 🥳 🎁 🎈 🎂 🍰 🎇 🎆 ✨ ⭐ 🌟 💫 🔥 💯 ✅ ❌ ⚠️ ❓ ❗ 💤 👀 🎵 🎶 🏆 🥇 🎯 🎮 🎲".split(" ") },
+  { tab: "🧳", name: "Travel", list: "✈️ 🚗 🚕 🚙 🚌 🚆 🚄 🛳️ ⛴️ ⛵ 🏖️ 🏝️ 🏔️ ⛰️ 🗺️ 🧳 🏕️ ⛺ 🏨 🗽 🗼 🎡 🎢 🎪 🏟️ 🚀".split(" ") },
+  { tab: "🍕", name: "Food", list: "🍕 🍔 🍟 🌭 🍿 🥪 🌮 🌯 🥗 🍣 🍜 🍲 🍛 🍦 🍩 🍪 🍫 🍰 🧁 🍺 🍻 🥂 🍷 🍸 🍹 ☕ 🧋 🥤 🧃".split(" ") },
+  { tab: "💰", name: "Money", list: "💰 💵 💴 💶 💷 💳 🧾 📈 📉 💸 🤑 💲 🪙 📊 📅 📆 ⏰ ⏳ 💼 📌 🔖 ✏️ 📝".split(" ") },
+  { tab: "🐶", name: "Animals", list: "🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🦄 🐝 🦋 🐢 🐙 🌸 🌺 🌻 🌊 ☀️ 🌈 ⛅ 🌙 ⭐ 🍀".split(" ") },
+];
+const emojiDesktop = () => { try { return window.matchMedia("(min-width: 821px) and (pointer: fine)").matches; } catch { return false; } };
+let _emojiField = null, _emojiBtn = null, _emojiPop = null, _emojiCat = 0;
+function emojiInsertable(el) {
+  if (!el || el.dataset && el.dataset.noEmoji) return false;
+  if (el.tagName === "TEXTAREA") return true;
+  return el.tagName === "INPUT" && ["text", "search", ""].includes((el.getAttribute("type") || "text").toLowerCase());
+}
+function positionEmojiBtn(el) {
+  if (!_emojiBtn) return;
+  const r = el.getBoundingClientRect();
+  _emojiBtn.style.left = `${Math.round(r.right - 30)}px`;
+  _emojiBtn.style.top = `${Math.round(r.top + (r.height - 24) / 2)}px`;
+  _emojiBtn.hidden = false;
+}
+function hideEmoji() { if (_emojiBtn) _emojiBtn.hidden = true; if (_emojiPop) _emojiPop.hidden = true; }
+function renderEmojiGrid() {
+  if (!_emojiPop) return;
+  const cat = EMOJI_CATS[_emojiCat];
+  _emojiPop.innerHTML = `
+    <div class="emoji-tabs">${EMOJI_CATS.map((c, i) => `<button class="emoji-tab${i === _emojiCat ? " on" : ""}" data-cat="${i}" title="${c.name}">${c.tab}</button>`).join("")}</div>
+    <div class="emoji-grid">${cat.list.map((e) => `<button class="emoji-cell" data-emo="${e}">${e}</button>`).join("")}</div>`;
+  _emojiPop.querySelectorAll("[data-cat]").forEach((b) => b.onmousedown = (ev) => { ev.preventDefault(); _emojiCat = +b.dataset.cat; renderEmojiGrid(); });
+  _emojiPop.querySelectorAll("[data-emo]").forEach((b) => b.onmousedown = (ev) => { ev.preventDefault(); insertEmoji(b.dataset.emo); });
+}
+function openEmojiPop() {
+  if (!_emojiPop || !_emojiBtn) return;
+  renderEmojiGrid();
+  _emojiPop.hidden = false;
+  const br = _emojiBtn.getBoundingClientRect();
+  const pw = 300, ph = 260;
+  let left = Math.min(br.right - pw, window.innerWidth - pw - 8); left = Math.max(8, left);
+  let top = br.bottom + 6;
+  if (top + ph > window.innerHeight - 8) top = Math.max(8, br.top - ph - 6); // flip up if no room below
+  _emojiPop.style.left = `${Math.round(left)}px`;
+  _emojiPop.style.top = `${Math.round(top)}px`;
+}
+function insertEmoji(emoji) {
+  const el = _emojiField; if (!el) return;
+  const start = el.selectionStart ?? el.value.length, end = el.selectionEnd ?? el.value.length;
+  el.value = el.value.slice(0, start) + emoji + el.value.slice(end);
+  const pos = start + emoji.length;
+  try { el.setSelectionRange(pos, pos); } catch (_) {}
+  el.dispatchEvent(new Event("input", { bubbles: true })); // let search/mentions/etc. react
+  el.focus();
+}
+function initEmoji() {
+  if (!emojiDesktop() || _emojiBtn) return;
+  _emojiBtn = document.createElement("button");
+  _emojiBtn.className = "emoji-btn"; _emojiBtn.type = "button"; _emojiBtn.textContent = "😊";
+  _emojiBtn.hidden = true; _emojiBtn.title = "Insert emoji";
+  _emojiPop = document.createElement("div");
+  _emojiPop.className = "emoji-pop"; _emojiPop.hidden = true;
+  document.body.append(_emojiBtn, _emojiPop);
+  // keep focus in the field when interacting with the button/popover
+  _emojiBtn.onmousedown = (e) => { e.preventDefault(); _emojiPop.hidden ? openEmojiPop() : (_emojiPop.hidden = true); };
+  document.addEventListener("focusin", (e) => {
+    if (emojiInsertable(e.target)) { _emojiField = e.target; _emojiPop.hidden = true; positionEmojiBtn(e.target); }
+  });
+  document.addEventListener("focusout", (e) => {
+    setTimeout(() => {
+      const a = document.activeElement;
+      if (a !== _emojiField && a !== _emojiBtn && !(_emojiPop && _emojiPop.contains(a))) hideEmoji();
+    }, 120);
+  });
+  const reflow = () => { if (_emojiField && !_emojiBtn.hidden) positionEmojiBtn(_emojiField); if (_emojiField && !_emojiPop.hidden) openEmojiPop(); };
+  window.addEventListener("scroll", reflow, true);
+  window.addEventListener("resize", reflow);
+}
+initEmoji();
+
+// ==================== NUMERIC INPUT GUARD ====================
+// Make number-ish fields foolproof: they only accept a valid number, no matter
+// what's typed or pasted. Money/quantity inputs already declare inputmode="decimal"
+// (or "numeric" for integers), so we sanitize those live. Runs in the capture phase
+// so each field's own oninput handler always sees an already-clean value.
+function sanitizeDecimal(v) {
+  v = String(v).replace(/[^\d.]/g, "");          // digits + dots only (no letters, signs, spaces)
+  const i = v.indexOf(".");
+  if (i !== -1) v = v.slice(0, i + 1) + v.slice(i + 1).replace(/\./g, ""); // keep only the first dot
+  return v;
+}
+document.addEventListener("input", (e) => {
+  const el = e.target;
+  if (!el || el.tagName !== "INPUT") return;
+  const im = (el.getAttribute("inputmode") || "").toLowerCase();
+  if (im !== "decimal" && im !== "numeric") return;
+  const clean = im === "numeric" ? el.value.replace(/\D/g, "") : sanitizeDecimal(el.value);
+  if (clean === el.value) return;
+  const caret = el.selectionStart, drop = el.value.length - clean.length;
+  el.value = clean;
+  try { const p = Math.max(0, Math.min((caret ?? clean.length) - drop, clean.length)); el.setSelectionRange(p, p); } catch (_) {}
+}, true);
+
 function openPeopleModal() {
   const people = store.state.people;
   modal("People", `
@@ -2938,7 +3057,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11x · payment reminders default ON (weekly) · search bars on Friends/Messages/Polls · approvals avatar colors";
+const BUILD = "2026-08-11z · favorites for friends/chats/polls · Friends count pill · desktop emoji picker · numeric-input guard";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
