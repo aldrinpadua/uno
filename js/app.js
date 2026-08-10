@@ -218,9 +218,15 @@ function renderDashboard() {
       <div class="card stat"><div class="label">You owe</div><div class="value neg">${fmtSum(owe)}</div></div>
       <div class="card stat"><div class="label">Active ledgers</div><div class="value">${ledgers.length}</div></div>
     </div>
+    ${(CLOUD && (store.state.invitations || []).length) ? `<div class="card" style="margin-top:16px;padding:6px 0">
+      <div class="exp-meta" style="padding:6px 14px;font-weight:700;color:var(--amber)">Group &amp; trip invites</div>
+      ${(store.state.invitations || []).map((i) => `<div class="bal-row"><div class="exp-cat">${kindIcon[i.kind] || "👥"}</div><div class="grow"><b>${esc(i.name)}</b> <span class="exp-meta">${kindLabel[i.kind] || "Group"} · invited by ${esc(i.inviter)}</span></div><button class="btn sm" data-iacc="${i.ledgerId}">Accept</button> <button class="btn ghost sm" data-idec="${i.ledgerId}">Decline</button></div>`).join("")}
+    </div>` : ""}
     <h3 style="margin:26px 0 10px">Your groups, trips & friends</h3>
     <div id="dashList"></div>`;
 
+  main.querySelectorAll("[data-iacc]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.acceptInvitation(b.dataset.iacc); if (r.ok) { toast("Joined."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
+  main.querySelectorAll("[data-idec]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.declineInvitation(b.dataset.idec); if (r.ok) { toast("Declined."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
   const list = $("#dashList");
   if (!ledgers.length) {
     list.innerHTML = emptyState("🧳", "Nothing here yet", "Create a group for your friend circle, a trip for your next getaway, or a 1:1 ledger with one friend.",
@@ -262,7 +268,7 @@ function renderFriends() {
   const owed = {}, owe = {};
   rows.forEach((r) => Object.entries(r.net).forEach(([c, v]) => { if (v > 0) owed[c] = (owed[c] || 0) + v; else if (v < 0) owe[c] = (owe[c] || 0) + v; }));
   const fmtSum = (o) => Object.keys(o).length ? Object.entries(o).map(([c, v]) => formatMoney(Math.abs(v), c)).join(" · ") : formatMoney(0);
-  const reqCount = CLOUD ? (store.state.friendRequests || []).length : 0;
+  const reqs = CLOUD ? (store.state.friendRequests || []) : [];
 
   main.innerHTML = `
     ${mobileBar()}
@@ -270,7 +276,10 @@ function renderFriends() {
       <div><h1 class="page-title">🧑‍🤝‍🧑 Friends</h1><p class="page-sub">People you've added and accepted.</p></div>
       ${CLOUD ? '<div style="display:flex;gap:8px"><button class="btn ghost" id="myLinkBtn">🔗 My link</button><button class="btn" id="addFriendBtn">＋ Add friend</button></div>' : '<button class="btn" data-new="individual">＋ Add friend</button>'}
     </div>
-    ${reqCount ? `<div class="card" style="margin-top:14px;display:flex;align-items:center;justify-content:space-between"><div><b>${reqCount}</b> friend request${reqCount === 1 ? "" : "s"} waiting</div><button class="btn sm" id="goInbox">Review</button></div>` : ""}
+    ${reqs.length ? `<div class="card" style="margin-top:14px;padding:6px 0">
+      <div class="exp-meta" style="padding:6px 14px;font-weight:700;color:var(--amber)">Friend request${reqs.length === 1 ? "" : "s"}</div>
+      ${reqs.map((r) => `<div class="bal-row">${avatarEl(r)}<div class="grow"><b>${esc(r.name)}</b>${r.username ? ` <span class="exp-meta">@${esc(r.username)}</span>` : ""} <span class="exp-meta">wants to be friends</span></div><button class="btn sm" data-facc="${r.id}">Accept</button> <button class="btn ghost sm" data-fdec="${r.id}">Decline</button></div>`).join("")}
+    </div>` : ""}
     <div class="grid cards-3" style="margin-top:14px">
       <div class="card stat"><div class="label">You are owed</div><div class="value pos">${fmtSum(owed)}</div></div>
       <div class="card stat"><div class="label">You owe</div><div class="value neg">${fmtSum(owe)}</div></div>
@@ -279,7 +288,8 @@ function renderFriends() {
     <div style="margin-top:20px" id="friendList"></div>`;
   if ($("#addFriendBtn")) $("#addFriendBtn").onclick = () => openAddFriendModal();
   if ($("#myLinkBtn")) $("#myLinkBtn").onclick = () => copyLink(store.friendLink(), "Your friend invite link");
-  if ($("#goInbox")) $("#goInbox").onclick = () => { view = { type: "invitations" }; render(); };
+  main.querySelectorAll("[data-facc]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.acceptFriendRequest(+b.dataset.facc); if (r.ok) { toast("You're now friends."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
+  main.querySelectorAll("[data-fdec]").forEach((b) => b.onclick = async () => { b.disabled = true; const r = await store.declineFriendRequest(+b.dataset.fdec); if (r.ok) { toast("Declined."); render(); } else { b.disabled = false; toast(r.error || "Failed."); } });
 
   const list = $("#friendList");
   if (!people.length) {
@@ -2243,7 +2253,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11e · date picker opens on click (Chrome) + auto-https on link fields";
+const BUILD = "2026-08-11f · friend requests in Friends tab + group/trip invites on Dashboard";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
