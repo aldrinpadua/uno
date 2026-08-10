@@ -320,6 +320,15 @@ input[type="date"]::-webkit-datetime-edit { padding: 0; line-height: normal; }
 .member-actions { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; }
 .list-more { width: 100%; text-align: left; color: var(--muted); background: none; border: none; cursor: pointer; padding: 8px 12px; font-size: 13px; }
 .list-more:hover { color: var(--text); }
+/* live search box on Friends / Messages / Polls */
+.search-input {
+  width: 100%; box-sizing: border-box; margin-top: 14px;
+  background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  border-radius: var(--radius-sm); padding: 10px 13px; font-size: 14px;
+}
+.search-input:focus { outline: none; border-color: var(--brand); }
+.search-input::placeholder { color: var(--muted); }
+
 /* dashboard segmented filter (All / Groups / Trips / Friends) */
 .seg { display: flex; gap: 8px; flex-wrap: wrap; }
 .seg-btn { background: var(--panel); border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 6px 13px; font-size: 13px; cursor: pointer; white-space: nowrap; }
