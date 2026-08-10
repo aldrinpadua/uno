@@ -306,6 +306,7 @@ class CloudStore {
         pendingInvites: pending,
         joinToken: l.join_token || null,
         reminder: l.reminder || { enabled: false, frequency: "weekly", lastSentAt: null, message: "" },
+        tripDetails: l.trip_details || null,
         admins, createdBy: l.created_by,
         iAmAdmin: l.created_by === myId || admins.includes(myId),
         iAmOwner: l.created_by === myId,
@@ -1025,6 +1026,16 @@ class CloudStore {
     this.state.expenses = this.state.expenses.filter((e) => e.ledgerId !== id);
     this._notify();
     this._try("ledger delete", () => this.sb.from("ledgers").delete().eq("id", id)); // cascades members + expenses
+  }
+
+  // Save a trip's details (creator/admins only — enforced server-side by set_trip_details).
+  async setTripDetails(ledgerId, details) {
+    const { data, error } = await this.sb.rpc("set_trip_details", { p_ledger: ledgerId, p_details: details });
+    if (error) return { ok: false, error: error.message };
+    if (data && data.ok === false) return data;
+    const l = this.ledgerById(ledgerId);
+    if (l) { l.tripDetails = details; this._notify(); }
+    return { ok: true };
   }
 
   // Leave a group/trip (works for owners too — ownership hands off server-side).
