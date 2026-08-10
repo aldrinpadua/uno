@@ -320,6 +320,34 @@ input[type="date"]::-webkit-datetime-edit { padding: 0; line-height: normal; }
 .member-actions { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; }
 .list-more { width: 100%; text-align: left; color: var(--muted); background: none; border: none; cursor: pointer; padding: 8px 12px; font-size: 13px; }
 .list-more:hover { color: var(--text); }
+/* desktop emoji picker */
+.emoji-btn {
+  position: fixed; z-index: 60; width: 24px; height: 24px; padding: 0;
+  border: none; background: transparent; cursor: pointer; font-size: 16px; line-height: 24px;
+  opacity: .6; border-radius: 6px;
+}
+.emoji-btn:hover { opacity: 1; background: var(--panel-2); }
+.emoji-pop {
+  position: fixed; z-index: 61; width: 300px; height: 260px; display: flex; flex-direction: column;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow); overflow: hidden;
+}
+.emoji-tabs { display: flex; gap: 2px; padding: 6px; border-bottom: 1px solid var(--line); flex: none; }
+.emoji-tab { flex: 1; background: transparent; border: none; cursor: pointer; font-size: 16px; padding: 5px 0; border-radius: 6px; opacity: .7; }
+.emoji-tab:hover { background: var(--panel); opacity: 1; }
+.emoji-tab.on { background: var(--panel-2); opacity: 1; }
+.emoji-grid { flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; padding: 8px; }
+.emoji-cell { background: transparent; border: none; cursor: pointer; font-size: 20px; padding: 4px 0; border-radius: 6px; }
+.emoji-cell:hover { background: var(--panel-2); }
+
+/* small count badge next to a page title (e.g. Friends 12) */
+.count-pill {
+  display: inline-block; vertical-align: middle; margin-left: 6px;
+  font-size: 13px; font-weight: 700; line-height: 1; color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 999px; padding: 4px 10px;
+}
+
 /* live search box on Friends / Messages / Polls */
 .search-input {
   width: 100%; box-sizing: border-box; margin-top: 14px;
