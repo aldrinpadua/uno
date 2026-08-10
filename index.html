@@ -1,11 +1,16 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="booting">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>UNO Ledger — split trips & bills with friends</title>
   <meta name="description" content="Split bills and trip expenses with friends. Groups, itemized splits, multi-currency, smart settle-up, and email reminders." />
   <link rel="icon" type="image/svg+xml" href="./assets/logo.svg" />
+  <!-- Hide the app shell until boot() decides login vs. app, so a refresh on the
+       sign-in screen never flashes the platform. Safety timeout reveals it even if
+       the script fails to load. -->
+  <style>html.booting #app { visibility: hidden; }</style>
+  <script>setTimeout(function(){document.documentElement.classList.remove('booting');}, 8000);</script>
   <link rel="stylesheet" href="./css/styles.css" />
   <!-- Cloudflare Turnstile (CAPTCHA on the login screen). Harmless if unused. -->
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
