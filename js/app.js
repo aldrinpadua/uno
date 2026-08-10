@@ -2227,11 +2227,26 @@ function setDot(id, n) {
   if (!dot) return;
   if (n > 0) { dot.textContent = n; dot.hidden = false; } else { dot.hidden = true; }
 }
+// Ensure a red-dot badge span exists on a static nav-item (Dashboard/Friends).
+function ensureNavDot(viewName, id) {
+  const item = document.querySelector(`.nav-item[data-view="${viewName}"]`);
+  if (!item || document.getElementById(id)) return;
+  const s = document.createElement("span");
+  s.className = "nav-dot"; s.id = id; s.hidden = true;
+  item.appendChild(s);
+}
 function updateInboxBadge() {
   setDot("inboxDot", CLOUD && store.pendingCount ? store.pendingCount() : 0);
   setDot("apprDot", CLOUD && store.isPlatformAdmin && store.pendingApprovalCount ? store.pendingApprovalCount() : 0);
   setDot("msgDot", CLOUD && store.messagesUnread ? store.messagesUnread() : 0);
   setDot("pollDot", CLOUD && store.pollsPending ? store.pollsPending() : 0);
+  // Per-tab badges: friend requests on Friends, group/trip invites on Dashboard.
+  if (CLOUD) {
+    ensureNavDot("friends", "friendsDot");
+    ensureNavDot("dashboard", "dashDot");
+    setDot("friendsDot", (store.state.friendRequests || []).length);
+    setDot("dashDot", (store.state.invitations || []).length);
+  }
 }
 // Refresh pending queues when the tab regains focus, so new items appear without a reload.
 let _inboxBusy = false;
@@ -2262,7 +2277,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11g · remove-friend option + revoked friends shown as unavailable";
+const BUILD = "2026-08-11h · fix group/trip ownership (leave/delete/add-member) + Friends/Dashboard badges";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
