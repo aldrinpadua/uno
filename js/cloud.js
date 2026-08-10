@@ -453,7 +453,17 @@ class CloudStore {
     return { ok: true };
   }
   async deleteMessage(messageId) {
-    const { error } = await this.sb.from("messages").update({ deleted: true, body: null }).eq("id", messageId);
+    // Purge any attachment files from storage first, then soft-delete the message
+    // (row stays as a "message deleted" tombstone, but body + attachments are cleared).
+    try {
+      const { data } = await this.sb.from("messages").select("attachments").eq("id", messageId).maybeSingle();
+      const atts = data && data.attachments;
+      if (Array.isArray(atts) && atts.length) {
+        const paths = atts.map((a) => (a && a.url ? String(a.url).replace(/^.*\/chat-uploads\//, "") : null)).filter(Boolean);
+        if (paths.length) await this._try("chat file delete", () => this.sb.storage.from("chat-uploads").remove(paths));
+      }
+    } catch (e) { console.error("[cloud] attachment cleanup on delete:", e.message || e); }
+    const { error } = await this.sb.from("messages").update({ deleted: true, body: null, attachments: null }).eq("id", messageId);
     if (error) return { ok: false, error: error.message };
     return { ok: true };
   }

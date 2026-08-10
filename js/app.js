@@ -393,10 +393,12 @@ async function renderChat(chatId) {
   const c = store.chatMeta(chatId);
   const title = c ? store.chatTitle(c) : "Chat";
   const disabled = !!(c && c.disabled); // 1:1 whose other person was revoked/deleted
+  const dmOther = (c && !c.isGroup) ? (c.members || [])[0] : null; // the other person in a 1:1
   main.innerHTML = `${mobileBar()}
     <div class="page-head">
       <div style="max-width:100%"><button class="link-btn" id="backMsgs" style="padding-left:0">← Messages</button>
-        <h1 class="page-title" style="font-size:20px;margin-top:8px">${c && c.isGroup ? "👥 " : ""}${esc(title)}</h1>
+        <h1 class="page-title" style="font-size:20px;margin-top:8px">${c && c.isGroup ? "👥 " + esc(title)
+          : (dmOther ? `<span class="prof-link" data-prof="${dmOther.id}">${esc(title)}</span>` : esc(title))}</h1>
         ${c && c.isGroup ? `<p class="page-sub">${(c.members || []).map((m) => `<a class="prof-link" data-prof="${m.id}">${esc(m.name)}</a>`).join(", ")}${c.members && c.members.length ? " · you" : ""}</p>` : ""}</div>
       <div style="display:flex;gap:8px">${c && c.isGroup ? `<button class="btn ghost sm" id="chatManage">Manage</button>` : ""}<button class="icon-btn" id="chatDelete" title="Delete conversation (only for you)">🗑️</button></div>
     </div>
@@ -1805,31 +1807,38 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-10d · disable chats to revoked/deleted users + profile popup";
+const BUILD = "2026-08-10f · sign-in flash fix + delete purges attachment files";
+// Reveal the app only after boot has decided what to show (login vs. app), so a
+// refresh on the sign-in screen never flashes the static shell underneath.
+function revealApp() { document.documentElement.classList.remove("booting"); }
 async function boot() {
   console.log("%cUNO Ledger build:", "color:#D8A32B;font-weight:bold", BUILD);
-  if (CONFIG.MODE === "cloud") {
-    let ok = false;
-    try { ok = await startCloud(); }
-    catch (e) {
-      document.getElementById("main").innerHTML =
-        `<div class="empty-state"><div class="big">⚠️</div><h3 style="color:var(--text)">Couldn't connect to Supabase</h3><p>${esc(e.message || e)}</p><p class="hint">Double-check SUPABASE_URL and the key in js/config.js.</p></div>`;
+  try {
+    if (CONFIG.MODE === "cloud") {
+      let ok = false;
+      try { ok = await startCloud(); }
+      catch (e) {
+        document.getElementById("main").innerHTML =
+          `<div class="empty-state"><div class="big">⚠️</div><h3 style="color:var(--text)">Couldn't connect to Supabase</h3><p>${esc(e.message || e)}</p><p class="hint">Double-check SUPABASE_URL and the key in js/config.js.</p></div>`;
+        return;
+      }
+      if (!ok) return; // login/pending screen is showing; don't render the app
+      addSignOut();
+      addMessagesNav();
+      addInboxNav();
+      addAdminNav();
+      wireInboxRefresh();
+      if (store.onMessage) store.onMessage(onRealtime);
+      if (store.startRealtime) store.startRealtime();
+      restoreView();
+      render();
+      if (!store.state.you.username) openUsernameModal(true); // required on first sign-in
       return;
     }
-    if (!ok) return; // login screen is showing; don't render the app
-    addSignOut();
-    addMessagesNav();
-    addInboxNav();
-    addAdminNav();
-    wireInboxRefresh();
-    if (store.onMessage) store.onMessage(onRealtime);
-    if (store.startRealtime) store.startRealtime();
     restoreView();
     render();
-    if (!store.state.you.username) openUsernameModal(true); // required on first sign-in
-    return;
+  } finally {
+    revealApp(); // whichever screen we ended on, show it now
   }
-  restoreView();
-  render();
 }
 boot();
