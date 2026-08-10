@@ -369,9 +369,9 @@ function renderMessages(skipRefresh) {
   const list = $("#chatList");
   if (!chats.length) { list.innerHTML = emptyState("💬", "No chats yet", "Start a chat with a friend or a group. You can also tap the 💬 next to anyone in Friends or a group's Members."); }
   else list.innerHTML = chats.map((c) => `
-    <div class="exp-row" data-chat="${c.id}" style="cursor:pointer">
+    <div class="exp-row" data-chat="${c.id}" style="cursor:pointer${c.disabled ? ";opacity:.6" : ""}">
       ${chatAvatar(c)}
-      <div class="exp-main"><div class="exp-desc">${esc(store.chatTitle(c))}${c.isGroup ? ` <span class="exp-meta">· ${(c.members || []).length + 1} people</span>` : ""}</div>
+      <div class="exp-main"><div class="exp-desc">${esc(store.chatTitle(c))}${c.isGroup ? ` <span class="exp-meta">· ${(c.members || []).length + 1} people</span>` : ""}${c.disabled ? ` <span class="exp-meta">· 🚫 unavailable</span>` : ""}</div>
         <div class="exp-meta" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60vw">${c.lastBody ? esc(c.lastBody) : "No messages yet"}</div></div>
       ${c.unread ? `<span class="nav-dot" style="margin-left:0">${c.unread}</span>` : ""}
     </div>`).join("");
@@ -392,15 +392,18 @@ async function renderChat(chatId) {
   const main = $("#main");
   const c = store.chatMeta(chatId);
   const title = c ? store.chatTitle(c) : "Chat";
+  const disabled = !!(c && c.disabled); // 1:1 whose other person was revoked/deleted
   main.innerHTML = `${mobileBar()}
     <div class="page-head">
       <div style="max-width:100%"><button class="link-btn" id="backMsgs" style="padding-left:0">← Messages</button>
         <h1 class="page-title" style="font-size:20px;margin-top:8px">${c && c.isGroup ? "👥 " : ""}${esc(title)}</h1>
-        ${c && c.isGroup ? `<p class="page-sub">${(c.members || []).map((m) => esc(m.name)).join(", ")}${c.members && c.members.length ? " · you" : ""}</p>` : ""}</div>
+        ${c && c.isGroup ? `<p class="page-sub">${(c.members || []).map((m) => `<a class="prof-link" data-prof="${m.id}">${esc(m.name)}</a>`).join(", ")}${c.members && c.members.length ? " · you" : ""}</p>` : ""}</div>
       <div style="display:flex;gap:8px">${c && c.isGroup ? `<button class="btn ghost sm" id="chatManage">Manage</button>` : ""}<button class="icon-btn" id="chatDelete" title="Delete conversation (only for you)">🗑️</button></div>
     </div>
     <div id="msgScroll" style="max-height:calc(100vh - 280px);overflow-y:auto;padding:4px 0"><div class="exp-meta" style="padding:10px 14px">Loading…</div></div>
-    <div class="composer-wrap">
+    ${disabled
+      ? `<div class="disabled-note">🚫 This person is no longer on UNO Ledger. You can read past messages, but you can't send new ones.</div>`
+      : `<div class="composer-wrap">
       <div id="mentionMenu" class="mention-menu" hidden></div>
       <div class="composer">
         <input type="file" id="msgFile" hidden>
@@ -408,8 +411,9 @@ async function renderChat(chatId) {
         <input id="msgInput" class="composer-input" placeholder="Message…  (@ to mention)" autocomplete="off">
         <button class="btn composer-send" id="msgSend">Send</button>
       </div>
-    </div>`;
+    </div>`}`;
   wireMobile();
+  main.querySelectorAll("[data-prof]").forEach((el) => el.onclick = () => openChatProfile(chatId, el.dataset.prof));
   $("#backMsgs").onclick = () => { view = { type: "messages" }; render(); };
   if ($("#chatManage")) $("#chatManage").onclick = () => openManageChatModal(chatId);
   $("#chatDelete").onclick = () => confirmDelete("Delete this conversation for you? Others keep theirs, and it comes back if someone messages the chat again.", async () => {
@@ -424,7 +428,7 @@ async function renderChat(chatId) {
     box.innerHTML = msgs.map((m) => {
       const s = store.chatSender(chatId, m.sender);
       const time = new Date(m.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-      const who = m.mine || !c || !c.isGroup ? "" : `<div class="msg-who">${esc(s.name)}</div>`;
+      const who = m.mine || !c || !c.isGroup ? "" : `<div class="msg-who prof-link" data-prof="${m.sender}">${esc(s.name)}</div>`;
       const atts = (m.attachments || []).map((a) => (a.type && a.type.startsWith("image/"))
         ? `<a href="${esc(a.url)}" target="_blank" rel="noopener"><img src="${esc(a.url)}" class="msg-img" loading="lazy"></a>`
         : `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="msg-file">📎 <span class="fn">${esc(a.name || "file")}</span>${a.size ? `<span class="fsz">${fmtBytes(a.size)}</span>` : ""}</a>`).join("");
@@ -432,14 +436,16 @@ async function renderChat(chatId) {
         ? `<div style="opacity:.6;font-style:italic">message deleted</div>`
         : `${atts}${m.body ? `<div>${renderMsgBody(m.body, m.mentions)}</div>` : ""}<div class="msg-time">${time}${m.editedAt ? " · edited" : ""}</div>`;
       const tap = (m.mine && !m.deleted) ? ` data-msg="${m.id}" style="cursor:pointer"` : "";
+      const avTap = (!m.mine && m.sender) ? ` class="avatar sm prof-link" data-prof="${m.sender}"` : ` class="avatar sm"`;
       return `<div class="msg-row ${m.mine ? "mine" : ""}">
-        ${m.mine ? "" : `<div class="avatar sm" style="background:${avColor(s)}">${esc(initials(s.name))}</div>`}
+        ${m.mine ? "" : `<div${avTap} style="background:${avColor(s)}">${esc(initials(s.name))}</div>`}
         <div class="msg-bubble ${m.mine ? "mine" : ""}"${tap}>${who}${inner}</div>
       </div>`;
     }).join("");
     box.querySelectorAll("[data-msg]").forEach((el) => el.onclick = () => {
       const msg = current.find((x) => String(x.id) === el.dataset.msg); if (msg) openMessageActions(msg, reload);
     });
+    box.querySelectorAll("[data-prof]").forEach((el) => el.onclick = () => openChatProfile(chatId, el.dataset.prof));
     box.scrollTop = box.scrollHeight;
   };
   current = await store.chatMessages(chatId);
@@ -451,6 +457,8 @@ async function renderChat(chatId) {
     if (view.type === "chat" && view.chatId === chatId && evt.chatId === chatId)
       reload().then(() => store.markChatRead(chatId).then(() => updateInboxBadge()));
   };
+
+  if (disabled) return; // read-only conversation: no composer to wire
 
   // ---------- @-mentions ----------
   // Candidates: people in this chat + my groups/trips. Picked mentions are tracked
@@ -617,6 +625,26 @@ function openManageChatModal(chatId) {
     if (r.ok) { view = { type: "messages" }; render(); toast(r.deleted ? "You left — chat deleted." : "You left the chat."); }
     else toast(r.error || "Couldn't leave.");
   }, { confirmLabel: "Leave chat", title: "Leave chat?" }); };
+}
+
+// Small profile card shown when you tap someone's avatar/name in a chat.
+function openChatProfile(chatId, uid) {
+  const s = store.chatSender(chatId, uid);
+  const isMe = !!s.you;
+  const gone = !!s.gone;
+  const isFriend = !isMe && !gone && store.friends().some((f) => f.id === uid);
+  modal(gone ? "Former member" : (isMe ? "You" : s.name), `
+    <div style="display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center;padding:6px 0">
+      <div class="avatar" style="width:72px;height:72px;font-size:26px;background:${gone ? "var(--line)" : avColor(s)}">${gone ? "?" : esc(initials(s.name))}</div>
+      <div>
+        <div style="font-weight:700;font-size:18px">${gone ? "Former member" : esc(s.name)}${isMe ? ' <span class="exp-meta">(you)</span>' : ""}</div>
+        ${!gone && s.username ? `<div class="exp-meta">@${esc(s.username)}</div>` : ""}
+        ${gone ? `<div class="exp-meta" style="margin-top:6px">This person is no longer on UNO Ledger.</div>`
+               : (!isMe && !isFriend ? `<div class="exp-meta" style="margin-top:6px">Not in your friends yet.</div>` : "")}
+      </div>
+    </div>
+  `, `${!isMe && !gone ? `<button class="btn ghost" id="cpMsg" style="margin-right:auto">💬 Message</button>` : ""}<button class="btn" data-close>Close</button>`);
+  if ($("#cpMsg")) $("#cpMsg").onclick = () => { closeModal(); openDm(uid); };
 }
 
 function renderFriendDetail(friendId) {
@@ -1777,7 +1805,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-10c · leave group chat (deletes chat+files if last member)";
+const BUILD = "2026-08-10d · disable chats to revoked/deleted users + profile popup";
 async function boot() {
   console.log("%cUNO Ledger build:", "color:#D8A32B;font-weight:bold", BUILD);
   if (CONFIG.MODE === "cloud") {

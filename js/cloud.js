@@ -372,6 +372,7 @@ class CloudStore {
         id: c.id, name: c.name || null, isGroup: !!c.is_group,
         lastBody: c.last_body || "", lastAt: c.last_at ? new Date(c.last_at).getTime() : 0,
         unread: c.unread || 0, clearedAt: c.cleared_at || null, members: c.members || [],
+        disabled: !!c.disabled, // 1:1 whose other person was revoked/deleted → read-only
       })).sort((a, b) => b.lastAt - a.lastAt);
     });
     this._notify();
@@ -425,6 +426,8 @@ class CloudStore {
     return (data || []).map((m) => ({ id: m.id, chatId: m.chat_id, sender: m.sender, mine: m.sender === myId, body: m.body || "", deleted: !!m.deleted, editedAt: m.edited_at || null, attachments: m.attachments || null, mentions: m.mentions || null, at: m.created_at ? new Date(m.created_at).getTime() : 0 }));
   }
   async sendMessage(chatId, body, attachments, mentions) {
+    const meta = this.chatMeta(chatId);
+    if (meta && meta.disabled) return { ok: false, error: "This person is no longer on UNO Ledger — messaging is disabled." };
     const text = (body || "").trim();
     const atts = (attachments && attachments.length) ? attachments : null;
     const mens = (mentions && mentions.length) ? mentions : null;
@@ -508,10 +511,10 @@ class CloudStore {
   }
   // Resolve a sender uid to a display name/color within a chat.
   chatSender(chatId, uid) {
-    if (uid === myId) return { name: this.state.you.name, color: this.state.you.color };
+    if (uid === myId) return { id: myId, name: this.state.you.name, username: this.state.you.username, color: this.state.you.color, you: true };
     const c = this.chatMeta(chatId);
     const m = c && (c.members || []).find((x) => x.id === uid);
-    return m ? { name: m.name, color: m.color } : { name: "Someone", color: null };
+    return m ? { id: m.id, name: m.name, username: m.username, color: m.color } : { name: "Former member", color: null, gone: true };
   }
 
   // ---- reads (mirror LocalStore) ----
