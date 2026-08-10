@@ -1376,14 +1376,37 @@ Thanks!
 — sent via UNO`;
 }
 
+function openTransferOwnerModal(l) {
+  const cands = l.memberIds.filter((id) => id !== "you").map((id) => store.memberById(id)).filter((m) => m && m.userId);
+  if (!cands.length) return toast("No other members to transfer ownership to.");
+  modal("Transfer ownership", `
+    <p class="hint" style="margin-top:0">Choose who becomes the owner of ${esc(ledgerDisplayName(l))}. You'll remain an admin, and they'll be able to manage everything.</p>
+    <label>New owner</label>
+    <select id="toUser">${cands.map((m) => `<option value="${esc(m.userId)}">${esc(m.name)}</option>`).join("")}</select>
+  `, `<button class="btn ghost" data-close>Cancel</button><button class="btn" id="toDo">Transfer</button>`);
+  $("#toDo").onclick = () => {
+    const uid = $("#toUser").value;
+    const name = (cands.find((m) => m.userId === uid) || {}).name || "them";
+    closeModal();
+    confirmChoice(`Make ${name} the owner of ${ledgerDisplayName(l)}? You'll become an admin.`, "Transfer", "Cancel", async (yes) => {
+      if (!yes) return;
+      const r = await store.transferOwnership(l.id, uid);
+      if (r.ok) { render(); toast("Ownership transferred."); } else toast(r.error || "Couldn't transfer.");
+    });
+  };
+}
+
 function renderMembers(body, l) {
   const ownAdmins = new Set([l.createdBy, ...(l.admins || [])].filter(Boolean));
   const parentG = (l.kind === "trip" && l.parentId) ? store.ledgerById(l.parentId) : null;
   const groupAdmins = parentG ? new Set([parentG.createdBy, ...(parentG.admins || [])].filter(Boolean)) : new Set();
   const iAmAdmin = CLOUD && iAmAdminOf(l);
   const admin = !CLOUD || iAmAdminOf(l); // may I manage this ledger (add/remove members)?
-  const isOwner = (id, m) => id === "you" ? !!l.iAmOwner : !!(m && m.userId && m.userId === l.createdBy);
-  const ownAdmin = (id, m) => id === "you" ? !!l.iAmAdmin : !!(m && m.userId && ownAdmins.has(m.userId));
+  // The owner is identified by the ledger's created_by — match on the member's ref
+  // (which equals created_by for the owner) OR their user_id, so the owner is never
+  // shown a "make admin" toggle even if their member row's user_id is stale.
+  const isOwner = (id, m) => id === "you" ? !!l.iAmOwner : (!!l.createdBy && (id === l.createdBy || !!(m && m.userId === l.createdBy)));
+  const ownAdmin = (id, m) => id === "you" ? !!l.iAmAdmin : (isOwner(id, m) || !!(m && m.userId && ownAdmins.has(m.userId)));
   const viaGroup = (id, m) => {
     if (id === "you") return !l.iAmAdmin && iAmAdminOf(l);
     return !!(m && m.userId && groupAdmins.has(m.userId) && !ownAdmins.has(m.userId));
@@ -1464,8 +1487,13 @@ function renderMembers(body, l) {
     <h3 style="margin:20px 0 8px">Pending invitations</h3>
     <div class="card" style="padding:6px 0">${l.pendingInvites.map((p) => `<div class="bal-row">${avatarEl(p)}<div class="grow"><b>${esc(p.name)}</b>${p.username ? ` <span class="exp-meta">@${esc(p.username)}</span>` : ""} <span class="tag" style="color:var(--amber)">awaiting acceptance</span></div>${admin ? `<button class="icon-btn" data-cancelinv="${esc(p.id)}" title="Cancel invite">✖</button>` : ""}</div>`).join("")}</div>` : "";
   const linkHtml = (CLOUD && admin && l.kind !== "individual") ? `<div class="card" style="margin-top:14px"><label style="margin-top:0">🔗 Shareable invite link</label><div class="row"><input value="${esc(store.ledgerLink(l))}" readonly><button class="btn ghost" id="copyLedgerLink" style="flex:none">Copy</button></div><div class="hint" style="margin-top:6px">Anyone who opens it is asked to join ${esc(ledgerDisplayName(l))}.</div></div>` : "";
-  body.innerHTML = `${inheritNote}<div class="card" style="padding:6px 0">${membersHtml}</div>${pendingHtml}${addHtml}${linkHtml}${leaveHtml}`;
+  const transferHtml = (CLOUD && l.iAmOwner && l.kind !== "individual") ? `<div class="card" style="margin-top:14px">
+      <button class="btn ghost" id="transferOwner">👑 Transfer ownership</button>
+      <div class="hint" style="margin-top:6px">Hand this ${kindLabel[l.kind].toLowerCase()} to another member; you'll stay on as an admin. (If you leave without transferring, you can reclaim ownership by rejoining — as long as no one else has become owner.)</div>
+    </div>` : "";
+  body.innerHTML = `${inheritNote}<div class="card" style="padding:6px 0">${membersHtml}</div>${pendingHtml}${addHtml}${linkHtml}${transferHtml}${leaveHtml}`;
   if ($("#copyLedgerLink")) $("#copyLedgerLink").onclick = () => copyLink(store.ledgerLink(l), `${ledgerDisplayName(l)} invite link`);
+  if ($("#transferOwner")) $("#transferOwner").onclick = () => openTransferOwnerModal(l);
   body.querySelectorAll("[data-friendadd]").forEach((b) => b.onclick = async () => {
     b.disabled = true;
     const r = await store.sendFriendRequestUid(b.dataset.friendadd);
@@ -2277,7 +2305,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11h · fix group/trip ownership (leave/delete/add-member) + Friends/Dashboard badges";
+const BUILD = "2026-08-11j · transfer ownership + reclaim ownership on rejoin";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
