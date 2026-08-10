@@ -605,10 +605,18 @@ function openManageChatModal(chatId) {
     <select id="mcLedger"><option value="">— pick —</option>${store.ledgers().filter((l) => l.kind !== "individual").map((l) => `<option value="${l.id}">${esc(ledgerDisplayName(l))}</option>`).join("")}</select>
     <div style="margin-top:10px"><button class="btn ghost sm" id="mcAddLedger">Add group's people</button></div>
     <div id="mcMsg" style="margin-top:10px"></div>
+    <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+    <button class="btn danger" id="mcLeave" style="width:100%">Leave this chat</button>
+    <p class="hint" style="margin-top:6px">You'll be removed for everyone. If you're the last person, the chat and its messages are deleted.</p>
   `, `<button class="btn" data-close>Done</button>`);
   $("#mcRename").onclick = async () => { await store.renameChat(chatId, $("#mcName").value.trim()); toast("Renamed."); };
   $("#modalHost").querySelectorAll("[data-add]").forEach((b) => b.onclick = async () => { const r = await store.addUserToChat(chatId, b.dataset.add); if (r.ok) { toast("Added."); closeModal(); render(); } else toast(r.error || "Failed."); });
   $("#mcAddLedger").onclick = async () => { const lid = $("#mcLedger").value; if (!lid) return toast("Pick a group first."); const r = await store.addLedgerToChat(chatId, lid); if (r.ok) { toast("Added the group's people."); closeModal(); render(); } else toast(r.error || "Failed."); };
+  $("#mcLeave").onclick = () => { closeModal(); confirmDelete("Leave this chat? You'll be removed for everyone. If you're the last person in it, the chat and all its messages will be deleted.", async () => {
+    const r = await store.leaveChat(chatId);
+    if (r.ok) { view = { type: "messages" }; render(); toast(r.deleted ? "You left — chat deleted." : "You left the chat."); }
+    else toast(r.error || "Couldn't leave.");
+  }, { confirmLabel: "Leave chat", title: "Leave chat?" }); };
 }
 
 function renderFriendDetail(friendId) {
@@ -1769,7 +1777,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-10b · header→dashboard, mobile composer + chat-header spacing";
+const BUILD = "2026-08-10c · leave group chat (deletes chat+files if last member)";
 async function boot() {
   console.log("%cUNO Ledger build:", "color:#D8A32B;font-weight:bold", BUILD);
   if (CONFIG.MODE === "cloud") {

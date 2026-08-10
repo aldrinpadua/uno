@@ -459,6 +459,20 @@ class CloudStore {
     await this._try("clear chat", () => this.sb.rpc("clear_chat", { p_chat: chatId }));
     return { ok: true };
   }
+  // Leave a group chat. If I was the last member, the chat is deleted server-side
+  // (messages + members cascade) and its attachment files are returned so we can
+  // remove them from storage too.
+  async leaveChat(chatId) {
+    const { data, error } = await this.sb.rpc("leave_chat", { p_chat: chatId });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Couldn't leave chat." };
+    if (data.deleted && Array.isArray(data.paths) && data.paths.length) {
+      await this._try("chat file cleanup", () => this.sb.storage.from("chat-uploads").remove(data.paths));
+    }
+    this.state.chats = (this.state.chats || []).filter((c) => c.id !== chatId);
+    if (this.activeChat === chatId) this.activeChat = null;
+    this._notify();
+    return { ok: true, deleted: !!data.deleted };
+  }
   // ---- realtime (live messages + unread badges) ----
   onMessage(fn) { this.messageListeners.add(fn); return () => this.messageListeners.delete(fn); }
   startRealtime() {
