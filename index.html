@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en" class="booting">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UNO — one place. one us.</title>
+  <meta name="description" content="UNO — split bills and trip expenses with friends. Groups, itemized splits, multi-currency, smart settle-up, and email reminders." />
+  <link rel="icon" type="image/svg+xml" href="./assets/logo.svg" />
+  <!-- Hide the app shell until boot() decides login vs. app, so a refresh on the
+       sign-in screen never flashes the platform. Safety timeout reveals it even if
+       the script fails to load. -->
+  <style>html.booting #app { visibility: hidden; }</style>
+  <script>setTimeout(function(){document.documentElement.classList.remove('booting');}, 8000);</script>
+  <link rel="stylesheet" href="./css/styles.css" />
+  <!-- Cloudflare Turnstile (CAPTCHA on the login screen). Harmless if unused. -->
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+</head>
+<body>
+  <div id="app">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <img class="brand-mark" src="./assets/logo.svg" alt="UNO" />
+        <div>
+          <div class="brand-name">UNO</div>
+          <div class="brand-sub">one place. one us.</div>
+        </div>
+      </div>
+
+      <div class="you-card" id="youCard"></div>
+
+      <nav class="nav">
+        <button class="nav-item" data-view="dashboard">🏠 <span>Dashboard</span></button>
+        <button class="nav-item" data-view="friends">🧑‍🤝‍🧑 <span>Friends</span></button>
+      </nav>
+
+      <div class="nav-section">
+        <div class="nav-section-head"><span>Groups</span><button class="mini-btn" data-new="group" title="New group">＋</button></div>
+        <div id="groupList" class="nav-list"></div>
+      </div>
+
+      <div class="nav-section">
+        <div class="nav-section-head"><span>Trips</span><button class="mini-btn" data-new="trip" title="New trip">＋</button></div>
+        <div id="tripList" class="nav-list"></div>
+      </div>
+
+      <div class="sidebar-foot">
+        <button class="link-btn" id="dataBtn">💾 Export</button>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main" id="main"></main>
+  </div>
+
+  <!-- Mobile drawer backdrop (tap to close the sidebar) -->
+  <div class="backdrop" id="backdrop" hidden></div>
+
+  <!-- Modal host -->
+  <div class="modal-host" id="modalHost" hidden></div>
+  <div class="toast" id="toast" hidden></div>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
