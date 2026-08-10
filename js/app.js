@@ -668,10 +668,56 @@ function openChatProfile(chatId, uid) {
   if ($("#cpMsg")) $("#cpMsg").onclick = () => { closeModal(); openDm(uid); };
 }
 
+// ==================== TIME ZONES ====================
+// Every time is stored as an absolute UTC instant. We render (and read inputs)
+// in the user's chosen time zone — falling back to the browser's — so a "9:00"
+// they type means 9:00 where THEY are, and reminders arrive at the right moment.
+const DEFAULT_TZ = "America/New_York";   // Eastern — only a last-resort fallback if the device's zone can't be read
+function browserTZ() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || DEFAULT_TZ; } catch { return DEFAULT_TZ; } }
+// No explicit choice → follow whatever device you're on (Eastern if that can't be detected).
+function myTZ() { return (store.state.you && store.state.you.timezone) || browserTZ(); }
+// The offset (ms) a zone is from UTC at a given instant (handles DST).
+function tzOffsetMs(date, tz) {
+  const dtf = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const p = {};
+  for (const x of dtf.formatToParts(date)) if (x.type !== "literal") p[x.type] = x.value;
+  const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+  return asUTC - date.getTime();
+}
+// A wall-clock time in a zone → the matching UTC ISO string.
+function zonedToISO(y, mo, d, h, mi, tz) {
+  const guess = Date.UTC(y, mo - 1, d, h, mi);
+  const off = tzOffsetMs(new Date(guess), tz);   // offset near that instant
+  return new Date(guess - off).toISOString();
+}
+// A UTC ISO → {date, time} as it reads on the wall clock in a zone.
+function isoToZoned(iso, tz) {
+  const date = new Date(iso); if (isNaN(date)) return { date: "", time: "" };
+  const dtf = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const p = {};
+  for (const x of dtf.formatToParts(date)) if (x.type !== "literal") p[x.type] = x.value;
+  return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` };
+}
+// Parse a datetime-local value ("YYYY-MM-DDTHH:MM") in the user's zone → UTC ISO.
+function localInputToISO(val) {
+  if (!val) return null;
+  const [dp, tp] = val.split("T");
+  const [y, mo, d] = dp.split("-").map(Number);
+  const [h, mi] = (tp || "00:00").split(":").map(Number);
+  return zonedToISO(y, mo, d, h, mi, myTZ());
+}
+// A short zone label like "EDT" for the current user (for display clarity).
+function tzShort() {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: myTZ(), timeZoneName: "short" }).formatToParts(new Date());
+    const z = parts.find((p) => p.type === "timeZoneName"); return z ? z.value : "";
+  } catch { return ""; }
+}
+
 // ==================== POLLS ====================
 const POLL_ICON = { text: "📝", dates: "📅", datetime: "🕒" };
-const fmtDay = (iso) => new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
-const fmtDayTime = (iso) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+const fmtDay = (iso) => new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric", timeZone: myTZ() });
+const fmtDayTime = (iso) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: myTZ(), timeZoneName: "short" });
 // Summary shown in parentheses: dates → total days; datetime → d/h/m/s duration.
 function rangeSummary(kind, startAt, endAt) {
   if (!startAt || !endAt) return "";
@@ -699,16 +745,18 @@ function normalizeUrl(u) {
   if (!u) return "";
   return /^https?:\/\//i.test(u) ? u : "https://" + u;
 }
-// Deadline from a date input + a time input; time defaults to 11:59 PM.
+// Deadline from a date input + a time input; time defaults to 11:59 PM. Read in
+// the user's chosen time zone.
 function deadlineFromInputs(dateVal, timeVal) {
   if (!dateVal) return null;
-  return new Date(`${dateVal}T${timeVal || "23:59"}:00`).toISOString();
+  const [y, mo, d] = dateVal.split("-").map(Number);
+  const [h, mi] = (timeVal || "23:59").split(":").map(Number);
+  return zonedToISO(y, mo, d, h, mi, myTZ());
 }
-// Split an ISO deadline back into {date, time} for editing (local).
+// Split an ISO deadline back into {date, time} for editing (in the user's zone).
 function deadlineToInputs(iso) {
   if (!iso) return { date: "", time: "23:59" };
-  const d = new Date(iso); const pad = (n) => String(n).padStart(2, "0");
-  return { date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
+  return isoToZoned(iso, myTZ());
 }
 
 function renderPolls(skipRefresh) {
@@ -843,8 +891,8 @@ function openNewPollModal() {
       if (kind === "text") { if (o.label.trim()) built.push({ label: o.label.trim(), ref_url: normalizeUrl(o.ref_url), image_url: o.image_url, all_day: false }); }
       else {
         if (!o.start || !o.end) continue;
-        const startISO = kind === "dates" ? new Date(o.start + "T00:00:00").toISOString() : new Date(o.start).toISOString();
-        const endISO = kind === "dates" ? new Date(o.end + "T00:00:00").toISOString() : new Date(o.end).toISOString();
+        const startISO = kind === "dates" ? zonedToISO(...o.start.split("-").map(Number), 0, 0, myTZ()) : localInputToISO(o.start);
+        const endISO = kind === "dates" ? zonedToISO(...o.end.split("-").map(Number), 0, 0, myTZ()) : localInputToISO(o.end);
         if (new Date(endISO) < new Date(startISO)) return toast("An option's end is before its start.");
         built.push({ start_at: startISO, end_at: endISO, all_day: kind === "dates", ref_url: normalizeUrl(o.ref_url), image_url: o.image_url });
       }
@@ -990,8 +1038,8 @@ function openAddPollOption(d, reload) {
     else {
       const sv = $("#aoStart").value, ev = $("#aoEnd").value;
       if (!sv || !ev) return toast("Pick a start and end.");
-      opt.start_at = kind === "dates" ? new Date(sv + "T00:00:00").toISOString() : new Date(sv).toISOString();
-      opt.end_at = kind === "dates" ? new Date(ev + "T00:00:00").toISOString() : new Date(ev).toISOString();
+      opt.start_at = kind === "dates" ? zonedToISO(...sv.split("-").map(Number), 0, 0, myTZ()) : localInputToISO(sv);
+      opt.end_at = kind === "dates" ? zonedToISO(...ev.split("-").map(Number), 0, 0, myTZ()) : localInputToISO(ev);
       if (new Date(opt.end_at) < new Date(opt.start_at)) return toast("End is before start.");
     }
     const r = await store.addPollOption(d.id, opt);
@@ -1616,16 +1664,17 @@ function reminderLabel(secs) {
   const u = c.num === 1 ? c.unit.replace(/s$/, "") : c.unit;
   return `${c.num} ${u} before`;
 }
-// Date+time inputs → ISO (and back). Empty time falls back to a sensible default.
+// Date+time inputs → ISO (and back), read/written in the user's time zone.
+// Empty time falls back to a sensible default.
 function dtFromInputs(dateVal, timeVal, defTime) {
   if (!dateVal) return null;
-  return new Date(`${dateVal}T${timeVal || defTime || "00:00"}:00`).toISOString();
+  const [y, mo, d] = dateVal.split("-").map(Number);
+  const [h, mi] = (timeVal || defTime || "00:00").split(":").map(Number);
+  return zonedToISO(y, mo, d, h, mi, myTZ());
 }
 function dtToInputs(iso) {
   if (!iso) return { date: "", time: "" };
-  const d = new Date(iso); if (isNaN(d)) return { date: "", time: "" };
-  const pad = (n) => String(n).padStart(2, "0");
-  return { date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
+  return isoToZoned(iso, myTZ());
 }
 
 // Lazy-load the Google Maps Places library (only if a key is configured).
@@ -1753,9 +1802,10 @@ function renderTripDetailsForm(body, l, td) {
         </div>
         <div style="flex:1;min-width:220px">
           <label style="margin-top:0">🏁 Ends <span class="exp-meta">· required</span></label>
-          <div class="row"><input id="tdEndDate" type="date" value="${e.date}"><input id="tdEndTime" type="time" value="${e.time}"></div>
+          <div class="row"><input id="tdEndDate" type="date" value="${e.date}" min="${s.date || ""}"><input id="tdEndTime" type="time" value="${e.time}"></div>
         </div>
       </div>
+      <div class="hint" style="margin-top:6px">🕒 Times are in your zone: <b>${esc(myTZ())}${tzShort() ? " · " + esc(tzShort()) : ""}</b>. Everyone sees them in their own. <span style="opacity:.8">Set yours in your profile.</span></div>
 
       <label>📝 Description <span class="exp-meta">· required</span></label>
       <textarea id="tdDesc" rows="3" placeholder="What's the plan? Flights, hotel, the itinerary…">${esc(td.description || "")}</textarea>
@@ -1778,6 +1828,11 @@ function renderTripDetailsForm(body, l, td) {
     const sel = body.querySelector(`[data-rp="${i}"]`);
     if (sel) sel.onchange = () => { const rc = body.querySelector(`[data-rc="${i}"]`); rc.style.display = sel.value === "custom" ? "flex" : "none"; };
   });
+
+  // End can't precede start: keep the end-date picker's floor at the start date,
+  // and snap it forward if it somehow fell behind.
+  const sd = $("#tdStartDate"), ed = $("#tdEndDate");
+  if (sd && ed) sd.onchange = () => { ed.min = sd.value || ""; if (ed.value && sd.value && ed.value < sd.value) ed.value = sd.value; };
 
   // Google Places autocomplete (graceful — no key just leaves it as a text box).
   ensureMaps().then((ok) => {
@@ -1841,6 +1896,7 @@ function renderTripDetailsForm(body, l, td) {
     const details = {
       location: loc, lat: isFinite(lat) ? lat : null, lng: isFinite(lng) ? lng : null,
       startAt, endAt, description: desc, notes: notes || "", reminders: rem,
+      tz: myTZ(),   // creator's zone — used to format reminder emails for non-user guests
     };
 
     const btn = $("#tdSave"); btn.disabled = true;
@@ -1922,7 +1978,11 @@ function renderSettings(body, l) {
     if (l.kind === "trip") patch.parentId = $("#lParent").value || null;
     store.updateLedger(l.id, patch); render(); toast("Saved.");
   };
-  if ($("#lDel")) $("#lDel").onclick = () => confirmDelete(`Delete "${ledgerDisplayName(l)}" and all of its expenses? Everyone in it loses access.`, () => { store.removeLedger(l.id); view = { type: "dashboard" }; render(); toast("Deleted."); }, { confirmLabel: `Delete ${kindLabel[l.kind].toLowerCase()}`, phrase: CONFIRM_WORD });
+  if ($("#lDel")) $("#lDel").onclick = () => confirmDelete(`Delete "${ledgerDisplayName(l)}" and all of its expenses? Everyone in it loses access.`, async () => {
+    const res = await store.removeLedger(l.id);
+    if (res && res.ok === false) return toast(res.error || "Couldn't delete.");
+    view = { type: "dashboard" }; render(); toast("Deleted.");
+  }, { confirmLabel: `Delete ${kindLabel[l.kind].toLowerCase()}`, phrase: CONFIRM_WORD });
   $("#lCsv").onclick = () => exportLedgerCSV(l);
   $("#lPrint").onclick = () => exportLedgerPrint(l);
 }
@@ -2093,6 +2153,9 @@ function openPersonModal(id) {
       ${store.state.you.username
         ? `<div class="mail-preview">@${esc(store.state.you.username)} <span class="exp-meta">· permanent, can't be changed</span></div>`
         : `<div class="row"><input id="pUser" value="" placeholder="not set" disabled style="opacity:.85"><button class="btn ghost" id="pUserBtn" style="flex:none">Set username</button></div>`}` : ""}
+    ${showUser ? `<label>Time zone <span class="exp-meta">· when your reminders arrive</span></label>
+      <select id="pTZ">${tzOptionsHTML(store.state.you.timezone || "")}</select>
+      <div class="hint" style="margin-top:6px">Dates &amp; reminder times show in this zone. Leave on “Automatic” to follow whatever device you're on.</div>` : ""}
     ${showUser ? `<label>Thumbnail color</label>
       <div style="display:flex;align-items:center;gap:12px">
         <div class="avatar" id="avPreview" style="background:${avColor(store.state.you)}">${esc(initials(store.state.you.name))}</div>
@@ -2112,8 +2175,26 @@ function openPersonModal(id) {
     if ($("#pEmail")) patch.email = $("#pEmail").value.trim(); // own email is read-only (changed via the verified flow)
     store.updatePerson(id, patch);
     if (showUser && pickedColor !== (store.state.you.color || null)) await store.setAvatarColor(pickedColor);
+    if (showUser && $("#pTZ")) {
+      const tz = $("#pTZ").value || null;
+      if ((store.state.you.timezone || null) !== tz && store.setTimezone) await store.setTimezone(tz);
+    }
     closeModal(); render(); toast("Saved.");
   };
+}
+
+// Build <option>s for the time-zone picker. "" = Automatic (follow the device).
+function tzOptionsHTML(current) {
+  let zones = [];
+  try { zones = (Intl.supportedValuesOf && Intl.supportedValuesOf("timeZone")) || []; } catch (_) {}
+  if (!zones.length) zones = [
+    "Pacific/Honolulu", "America/Anchorage", "America/Los_Angeles", "America/Denver", "America/Chicago",
+    "America/New_York", "America/Sao_Paulo", "Europe/London", "Europe/Paris", "Europe/Berlin",
+    "Europe/Athens", "Africa/Johannesburg", "Asia/Dubai", "Asia/Kolkata", "Asia/Bangkok",
+    "Asia/Singapore", "Asia/Manila", "Asia/Shanghai", "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland", "UTC",
+  ];
+  const auto = `<option value="" ${!current ? "selected" : ""}>Automatic — follow this device (${esc(browserTZ())})</option>`;
+  return auto + zones.map((z) => `<option value="${esc(z)}" ${current === z ? "selected" : ""}>${esc(z.replace(/_/g, " "))}</option>`).join("");
 }
 
 // Verified email change — Supabase sends a confirmation link; the login email
@@ -2622,7 +2703,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11l · trip planner: Details tab (location/dates/notes) + up to 3 email reminders";
+const BUILD = "2026-08-11n · per-user time zones (auto-follow device) + tz-aware reminders/dates + end≥start guards + robust delete (no ghost groups)";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
