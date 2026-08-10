@@ -297,11 +297,12 @@ function renderFriends() {
   } else {
     list.innerHTML = rows.map(({ m, net }) => {
       const pending = CLOUD && !m.userId && m.email;
+      const inactive = CLOUD && m.active === false; // revoked / no longer on UNO
       const nShared = sharedLedgers(m.id).length;
-      return `<div class="exp-row">
+      return `<div class="exp-row"${inactive ? ' style="opacity:.55"' : ""}>
         <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;cursor:pointer" data-friend="${m.id}">
           ${avatarEl(m)}
-          <div class="exp-main"><div class="exp-desc">${esc(m.name)}${m.username ? ` <span class="exp-meta">@${esc(m.username)}</span>` : ""}${pending ? ' <span class="tag" style="color:var(--amber)">pending</span>' : ""}</div>
+          <div class="exp-main"><div class="exp-desc">${esc(m.name)}${m.username ? ` <span class="exp-meta">@${esc(m.username)}</span>` : ""}${pending ? ' <span class="tag" style="color:var(--amber)">pending</span>' : ""}${inactive ? ' <span class="tag" style="color:var(--red)">unavailable</span>' : ""}</div>
             <div class="exp-meta">${nShared} shared ${nShared === 1 ? "ledger" : "ledgers"}</div></div>
         </div>
         <div class="exp-amt"><div>${netToStr(net)}</div></div>
@@ -1062,6 +1063,9 @@ function renderFriendDetail(friendId) {
   const net = friendNet(friendId);
   const shared = sharedLedgers(friendId);
   const owesYouTotal = Object.values(net).some((v) => v > 0);
+  const fr = CLOUD ? store.friends().find((f) => f.id === (m.userId || friendId)) : null;
+  const isFriend = CLOUD ? !!fr : false;         // an explicit, accepted friend
+  const inactive = fr && fr.active === false;     // revoked / unavailable
 
   main.innerHTML = `
     ${mobileBar()}
@@ -1069,17 +1073,22 @@ function renderFriendDetail(friendId) {
       <div style="max-width:100%">
         <button class="link-btn" id="backFriends" style="padding-left:0">← Friends</button>
         <h1 class="page-title">${kindIcon.individual} ${esc(m.name)}</h1>
-        <p class="page-sub">${m.username ? "@" + esc(m.username) + " · " : ""}${m.email ? esc(m.email) : "no email"}${CLOUD && !m.userId && m.email ? " · <span style='color:var(--amber)'>invited, pending</span>" : ""}</p>
+        <p class="page-sub">${m.username ? "@" + esc(m.username) + " · " : ""}${m.email ? esc(m.email) : "no email"}${CLOUD && !m.userId && m.email ? " · <span style='color:var(--amber)'>invited, pending</span>" : ""}${inactive ? " · <span style='color:var(--red)'>unavailable</span>" : ""}</p>
       </div>
-      <div style="display:flex;gap:8px">${CLOUD && m.userId ? `<button class="btn ghost" id="dmFriend">💬 Message</button>` : ""}<button class="btn" id="addFriendExp">＋ Add expense</button></div>
+      <div style="display:flex;gap:8px">${CLOUD && m.userId && !inactive ? `<button class="btn ghost" id="dmFriend">💬 Message</button>` : ""}<button class="btn" id="addFriendExp">＋ Add expense</button></div>
     </div>
+    ${inactive ? `<div class="disabled-note" style="margin-top:12px">This person is no longer active on UNO. You can still see your shared history.</div>` : ""}
     <div class="card stat"><div class="label">Your balance with ${esc(m.name)}</div><div class="value">${netToStr(net)}</div></div>
     ${owesYouTotal ? `<div style="margin-top:12px"><button class="btn ghost" id="remindFriend">✉️ Copy a reminder</button></div>` : ""}
     <h3 style="margin:22px 0 10px">Shared groups & trips</h3>
-    <div id="sharedList"></div>`;
+    <div id="sharedList"></div>
+    ${isFriend ? `<hr style="border:none;border-top:1px solid var(--line);margin:20px 0"><button class="btn danger" id="unfriendBtn">Remove friend</button><p class="hint" style="margin-top:6px">Removes them from your friends. Your shared expenses and balances stay.</p>` : ""}`;
 
   $("#backFriends").onclick = () => { view = { type: "friends" }; render(); };
   if ($("#dmFriend")) $("#dmFriend").onclick = () => openDm(m.userId);
+  if ($("#unfriendBtn")) $("#unfriendBtn").onclick = () => confirmChoice(`Remove ${m.name} from your friends?`, "Remove friend", "Cancel", async (yes) => {
+    if (!yes) return; const r = await store.unfriendUser(m.userId || friendId); if (r.ok) { toast("Removed."); view = { type: "friends" }; render(); } else toast(r.error || "Failed.");
+  });
   $("#addFriendExp").onclick = async () => {
     // add an expense with just this person, in your 1:1 ledger (create if needed)
     let indiv = store.ledgers().find((l) => l.kind === "individual" && l.memberIds.includes(friendId));
@@ -2253,7 +2262,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-11f · friend requests in Friends tab + group/trip invites on Dashboard";
+const BUILD = "2026-08-11g · remove-friend option + revoked friends shown as unavailable";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
