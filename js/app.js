@@ -1522,7 +1522,7 @@ function renderFriendDetail(friendId) {
 }
 
 // ---------- platform admin: usage panel ----------
-const USAGE_LIMITS = { db: 500 * 1048576, file: 1073741824, email: 3000 };  // free tiers
+const USAGE_LIMITS = { db: 500 * 1048576, file: 1073741824, emailDay: 100, email: 3000 };  // free tiers (Resend: 100/day + 3000/mo)
 const fmtBig = (n) => { n = Number(n) || 0; if (n >= 1073741824) return (n / 1073741824).toFixed(2) + " GB"; if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB"; if (n >= 1024) return (n / 1024).toFixed(0) + " KB"; return n + " B"; };
 async function renderUsagePanel() {
   const el = $("#usageBody"); if (!el || !store.adminStorageUsage) return;
@@ -1539,8 +1539,9 @@ async function renderUsagePanel() {
     <label style="margin-top:0">📊 Usage <span class="exp-meta">· against free-tier limits</span></label>
     ${bar("Database", u.db_bytes || 0, USAGE_LIMITS.db, fmtBig)}
     ${bar("File storage (uploads)", u.file_bytes || 0, USAGE_LIMITS.file, fmtBig)}
+    ${bar("Emails today", u.email_today || 0, USAGE_LIMITS.emailDay, (n) => String(n))}
     ${bar("Emails this month", u.email_month || 0, USAGE_LIMITS.email, (n) => String(n))}
-    <div class="hint" style="margin-top:8px">Free-tier limits: Supabase 0.5&nbsp;GB database / 1&nbsp;GB uploads, Resend 3,000 emails/month. A red bar means it's time to upgrade Supabase (Billing) or Resend. Email count reflects reminder sends this month.</div>
+    <div class="hint" style="margin-top:8px">Free-tier limits: Supabase 0.5&nbsp;GB database / 1&nbsp;GB uploads; Resend <b>100 emails/day</b> and 3,000/month. The <b>daily</b> cap is the one you hit first — a red bar there means sends pause until it resets (UTC midnight). Upgrade Supabase (Billing) or Resend Pro to lift these.</div>
   </div>`;
 }
 
@@ -3200,7 +3201,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-12f · admin usage panel (db/storage/email) + weekly 80% usage-alert watchdog";
+const BUILD = "2026-08-12g · usage panel + watchdog now track DAILY email cap (100/day) not just monthly · all mail functions counted";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
