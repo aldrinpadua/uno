@@ -553,6 +553,19 @@ class CloudStore {
     if (data.path) this._try("poll image cleanup", () => this.sb.storage.from("poll-uploads").remove([data.path]));
     return { ok: true };
   }
+  async addPollParticipants(pollId, userIds, ledgerIds) {
+    const { data, error } = await this.sb.rpc("add_poll_participants", { p_poll: pollId, p_users: userIds || [], p_ledgers: ledgerIds || [] });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
+    this._try("poll invite email", () => this.sb.functions.invoke("notify-poll", { body: { pollId, event: "invite" } }));
+    await this.loadPolls();
+    return { ok: true };
+  }
+  async removePollParticipant(pollId, userId) {
+    const { data, error } = await this.sb.rpc("remove_poll_participant", { p_poll: pollId, p_user: userId });
+    if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
+    await this.loadPolls();
+    return { ok: true };
+  }
   async createRunoff(pollId, deadline) {
     const { data, error } = await this.sb.rpc("create_runoff", { p_poll: pollId, p_deadline: deadline || null });
     if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };

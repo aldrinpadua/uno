@@ -1365,6 +1365,8 @@ function openEditPollModal(d, reload) {
   const dl = deadlineToInputs(d.deadline);
   const others = (d.participants || []).filter((p) => p.status !== "declined");
   const admins = new Set((d.admins || []).map(String));
+  const partIds = new Set((d.participants || []).map((p) => String(p.id)));
+  const addableFriends = (store.friends ? store.friends() : []).filter((f) => !partIds.has(String(f.id)) && f.active !== false);
   modal("Edit poll", `
     <label style="margin-top:0">Title</label>
     <input id="epTitle" maxlength="200" value="${esc(d.title)}">
@@ -1378,11 +1380,33 @@ function openEditPollModal(d, reload) {
         ${!o.votes && !d.parent_poll_id ? `<button class="icon-btn" data-rmopt="${o.id}" title="Remove" style="margin-left:auto">✕</button>` : ""}
       </div>`).join("")}</div>
     ${!d.parent_poll_id ? `<button class="btn ghost sm" id="epAddOpt" style="margin-top:6px">＋ Add option</button>` : `<p class="hint" style="margin-top:6px">Runoff options are locked (already voted on).</p>`}
+    <hr style="border:none;border-top:1px solid var(--line);margin:14px 0">
+    <label>Participants (${(d.participants || []).length})</label>
+    <div class="chips" id="epParts">${(d.participants || []).length ? (d.participants || []).map((p) => `<span class="chip">${esc(p.name)}${p.status === "declined" ? ` <span class="exp-meta">· declined</span>` : ""}<button class="chip-x" data-rmpart="${p.id}" title="Remove">✕</button></span>`).join("") : `<span class="exp-meta">No one else yet.</span>`}</div>
+    <label>Add friends</label>
+    <div class="chips" id="epAddFriends">${addableFriends.length ? addableFriends.map((f) => `<span class="chip" data-addpart="${f.id}" title="Add">＋ ${esc(f.name)}</span>`).join("") : `<span class="exp-meta">All your friends are already in.</span>`}</div>
+    <label>Add everyone from a group / trip</label>
+    <div class="row"><select id="epAddLedger"><option value="">— pick —</option>${store.ledgers().filter((l) => l.kind !== "individual").map((l) => `<option value="${l.id}">${esc(ledgerDisplayName(l))}</option>`).join("")}</select><button class="btn ghost" id="epAddLedgerBtn" style="flex:none">Add</button></div>
     ${d.is_mine ? `<hr style="border:none;border-top:1px solid var(--line);margin:14px 0">
       <label>Poll admins (can also manage this poll)</label>
       <div class="chips" id="epAdmins">${others.length ? others.map((p) => `<span class="chip${admins.has(String(p.id)) ? " on" : ""}" data-admin="${p.id}">${esc(p.name)}</span>`).join("") : `<span class="exp-meta">No participants to assign.</span>`}</div>` : ""}
   `, `<button class="btn ghost" data-close>Cancel</button><button class="btn" id="epSave">Save</button>`);
   const host = $("#modalHost");
+  // re-open the edit modal with fresh data after a participant change
+  const refreshEdit = async () => { const nd = await store.pollDetail(d.id); closeModal(); reload(); if (nd && !nd.error) openEditPollModal(nd, reload); };
+  host.querySelectorAll("[data-rmpart]").forEach((b) => b.onclick = async () => {
+    const r = await store.removePollParticipant(d.id, b.dataset.rmpart);
+    if (r.ok) { toast("Removed."); refreshEdit(); } else toast(r.error || "Failed.");
+  });
+  host.querySelectorAll("[data-addpart]").forEach((b) => b.onclick = async () => {
+    const r = await store.addPollParticipants(d.id, [b.dataset.addpart], []);
+    if (r.ok) { toast("Added."); refreshEdit(); } else toast(r.error || "Failed.");
+  });
+  if ($("#epAddLedgerBtn")) $("#epAddLedgerBtn").onclick = async () => {
+    const lid = $("#epAddLedger").value; if (!lid) return toast("Pick a group or trip first.");
+    const r = await store.addPollParticipants(d.id, [], [lid]);
+    if (r.ok) { toast("Added the group's people."); refreshEdit(); } else toast(r.error || "Failed.");
+  };
   host.querySelectorAll("[data-rmopt]").forEach((b) => b.onclick = async () => {
     const r = await store.removePollOption(b.dataset.rmopt); if (r.ok) { toast("Removed."); closeModal(); reload(); } else toast(r.error || "Failed.");
   });
@@ -3151,7 +3175,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-12c · chat: date dividers, reply-to, live read receipts · polls: created/closed metadata (who + manual vs deadline)";
+const BUILD = "2026-08-12d · edit poll participants (add/remove) · brighter read-receipt ticks";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
