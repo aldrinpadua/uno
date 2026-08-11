@@ -863,6 +863,11 @@ class CloudStore {
   // ---- platform admin: approve / revoke new signups ----
   // Fetches fresh from the DB each call, so once any admin approves someone the
   // others see the current state (an approved person leaves the pending list).
+  async adminStorageUsage() {
+    const { data, error } = await this.sb.rpc("admin_storage_usage");
+    if (error) return { error: error.message };
+    return data || { error: "No data." };
+  }
   async listUsersAdmin() {
     const { data, error } = await this.sb.rpc("list_users_admin");
     if (error) { console.error("[cloud] list users failed:", error.message); return []; }

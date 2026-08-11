@@ -1521,6 +1521,29 @@ function renderFriendDetail(friendId) {
   wireMobile();
 }
 
+// ---------- platform admin: usage panel ----------
+const USAGE_LIMITS = { db: 500 * 1048576, file: 1073741824, email: 3000 };  // free tiers
+const fmtBig = (n) => { n = Number(n) || 0; if (n >= 1073741824) return (n / 1073741824).toFixed(2) + " GB"; if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB"; if (n >= 1024) return (n / 1024).toFixed(0) + " KB"; return n + " B"; };
+async function renderUsagePanel() {
+  const el = $("#usageBody"); if (!el || !store.adminStorageUsage) return;
+  const u = await store.adminStorageUsage();
+  if (view.type !== "approvals" || !el.isConnected) return;
+  if (!u || u.error) { el.innerHTML = ""; return; }
+  const bar = (label, used, limit, fmt) => {
+    const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+    const cls = pct >= 80 ? "usage-red" : pct >= 60 ? "usage-amber" : "usage-green";
+    return `<div class="usage-row"><div class="usage-head"><span>${label}</span><span class="exp-meta">${fmt(used)} / ${fmt(limit)} · ${pct}%</span></div>
+      <div class="usage-track"><span class="${cls}" style="width:${pct}%"></span></div></div>`;
+  };
+  el.innerHTML = `<div class="card" style="margin:14px 0">
+    <label style="margin-top:0">📊 Usage <span class="exp-meta">· against free-tier limits</span></label>
+    ${bar("Database", u.db_bytes || 0, USAGE_LIMITS.db, fmtBig)}
+    ${bar("File storage (uploads)", u.file_bytes || 0, USAGE_LIMITS.file, fmtBig)}
+    ${bar("Emails this month", u.email_month || 0, USAGE_LIMITS.email, (n) => String(n))}
+    <div class="hint" style="margin-top:8px">Free-tier limits: Supabase 0.5&nbsp;GB database / 1&nbsp;GB uploads, Resend 3,000 emails/month. A red bar means it's time to upgrade Supabase (Billing) or Resend. Email count reflects reminder sends this month.</div>
+  </div>`;
+}
+
 // ---------- platform admin: approvals ----------
 async function renderApprovals() {
   const main = $("#main");
@@ -1530,9 +1553,11 @@ async function renderApprovals() {
       <div><h1 class="page-title">🛡️ Approvals</h1><p class="page-sub">Approve or reject people who’ve signed up. Any of the three admins can act — the list is shared, so once someone’s approved they drop off everyone’s pending list.</p></div>
       <button class="btn ghost" id="refreshAppr">↻ Refresh</button>
     </div>
+    <div id="usageBody"></div>
     <div id="apprBody"><div class="exp-meta">Loading…</div></div>`;
   wireMobile();
   $("#refreshAppr").onclick = () => renderApprovals();
+  renderUsagePanel();
 
   const users = await store.listUsersAdmin();
   const pending = users.filter((u) => !u.approved);
@@ -3175,7 +3200,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-12e · poll participant-add emails ONLY the freshly-added people";
+const BUILD = "2026-08-12f · admin usage panel (db/storage/email) + weekly 80% usage-alert watchdog";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
