@@ -559,6 +559,7 @@ async function renderChat(chatId) {
       ? `<div class="disabled-note">🚫 This person is no longer on UNO. You can read past messages, but you can't send new ones.</div>`
       : `<div class="composer-wrap">
       <div id="mentionMenu" class="mention-menu" hidden></div>
+      <div id="replyBar" hidden></div>
       <div class="composer">
         <input type="file" id="msgFile" hidden>
         <button class="btn ghost composer-attach" id="msgAttach" title="Attach a photo or file">📎</button>
@@ -577,6 +578,37 @@ async function renderChat(chatId) {
 
   let current = [];
   const reload = async () => { current = await store.chatMessages(chatId); if (view.type === "chat" && view.chatId === chatId) paint(current); };
+
+  // ---- reply-to state ----
+  let replyingTo = null;
+  const renderReplyBar = () => {
+    const bar = $("#replyBar"); if (!bar) return;
+    if (!replyingTo) { bar.hidden = true; bar.innerHTML = ""; return; }
+    const s = store.chatSender(chatId, replyingTo.sender);
+    bar.hidden = false;
+    bar.innerHTML = `<div class="reply-bar"><div class="reply-bar-txt"><b>↩ Replying to ${esc(s.name)}</b><div class="reply-bar-prev">${esc(msgPreview(replyingTo))}</div></div><button class="icon-btn" id="replyCancel" title="Cancel">✕</button></div>`;
+    const cx = $("#replyCancel"); if (cx) cx.onclick = () => { replyingTo = null; renderReplyBar(); };
+  };
+  const startReply = (m) => { replyingTo = m; renderReplyBar(); const i = $("#msgInput"); if (i) i.focus(); };
+
+  // ---- read receipts + day dividers ----
+  const others = () => (c && c.members) || [];
+  const dayKey = (ms) => new Date(ms).toLocaleDateString("en-CA", { timeZone: myTZ() });
+  const dayLabel = (ms) => {
+    const k = dayKey(ms), today = dayKey(Date.now()), yd = dayKey(Date.now() - 86400000);
+    if (k === today) return "Today";
+    if (k === yd) return "Yesterday";
+    return new Date(ms).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: myTZ() });
+  };
+  const readReceipt = (m) => {
+    if (!m.mine || m.deleted) return "";
+    const os = others(); if (!os.length) return "";
+    const readers = os.filter((o) => o.lastReadAt && new Date(o.lastReadAt).getTime() >= m.at);
+    if (!c.isGroup) return readers.length ? `<span class="rcpt read" title="Read">✓✓</span>` : `<span class="rcpt" title="Sent">✓</span>`;
+    if (!readers.length) return `<span class="rcpt" title="Sent">✓</span>`;
+    const all = readers.length === os.length;
+    return `<span class="rcpt read" data-readby="${m.id}" title="Read by ${readers.length} of ${os.length} — tap for who">✓✓ ${all ? "all" : readers.length}</span>`;
+  };
   // Slim banner of the two most-recent pins; any member can unpin from here or jump to it.
   const paintPins = (msgs) => {
     const bar = $("#pinBanner"); if (!bar) return;
@@ -600,7 +632,12 @@ async function renderChat(chatId) {
     const box = $("#msgScroll"); if (!box) return;
     paintPins(msgs);
     if (!msgs.length) { box.innerHTML = `<div class="exp-meta" style="padding:10px 14px">No messages yet — say hi 👋</div>`; return; }
-    box.innerHTML = msgs.map((m) => {
+    let lastDay = null;
+    const parts = [];
+    for (const m of msgs) {
+      // date divider whenever the day changes
+      const k = dayKey(m.at);
+      if (k !== lastDay) { parts.push(`<div class="day-divider"><span>${esc(dayLabel(m.at))}</span></div>`); lastDay = k; }
       const s = store.chatSender(chatId, m.sender);
       const time = new Date(m.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
       const who = m.mine || !c || !c.isGroup ? "" : `<div class="msg-who prof-link" data-prof="${m.sender}">${esc(s.name)}</div>`;
@@ -608,20 +645,29 @@ async function renderChat(chatId) {
         ? `<a href="${esc(a.url)}" target="_blank" rel="noopener"><img src="${esc(a.url)}" class="msg-img" loading="lazy"></a>`
         : `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="msg-file">📎 <span class="fn">${esc(a.name || "file")}</span>${a.size ? `<span class="fsz">${fmtBytes(a.size)}</span>` : ""}</a>`).join("");
       const pinMark = (m.pinnedAt && !m.deleted) ? `<span class="msg-pinned" title="Pinned">📌</span>` : "";
+      // quoted preview of the message this one replies to (tap to jump to it)
+      let quote = "";
+      if (m.replyTo && !m.deleted) {
+        const orig = msgs.find((x) => String(x.id) === String(m.replyTo));
+        const qWho = orig ? store.chatSender(chatId, orig.sender).name : "";
+        quote = `<div class="reply-quote" data-jump="${m.replyTo}"><b>${esc(qWho || "Reply")}</b> ${esc(orig ? msgPreview(orig) : "original message")}</div>`;
+      }
       const inner = m.deleted
         ? `<div style="opacity:.6;font-style:italic">message deleted</div>`
-        : `${atts}${m.body ? `<div>${renderMsgBody(m.body, m.mentions)}</div>` : ""}<div class="msg-time">${pinMark}${time}${m.editedAt ? " · edited" : ""}</div>`;
-      // Any member can tap a (non-deleted) message to pin it; owners also get edit/delete.
+        : `${quote}${atts}${m.body ? `<div>${renderMsgBody(m.body, m.mentions)}</div>` : ""}<div class="msg-time">${pinMark}${time}${m.editedAt ? " · edited" : ""}${readReceipt(m)}</div>`;
       const tap = !m.deleted ? ` data-msg="${m.id}" style="cursor:pointer"` : "";
       const avTap = (!m.mine && m.sender) ? ` class="avatar sm prof-link" data-prof="${m.sender}"` : ` class="avatar sm"`;
-      return `<div class="msg-row ${m.mine ? "mine" : ""}" id="msg-${m.id}">
+      parts.push(`<div class="msg-row ${m.mine ? "mine" : ""}" id="msg-${m.id}">
         ${m.mine ? "" : `<div${avTap} style="background:${avColor(s)}">${esc(initials(s.name))}</div>`}
         <div class="msg-bubble ${m.mine ? "mine" : ""}"${tap}>${who}${inner}</div>
-      </div>`;
-    }).join("");
+      </div>`);
+    }
+    box.innerHTML = parts.join("");
     box.querySelectorAll("[data-msg]").forEach((el) => el.onclick = () => {
-      const msg = current.find((x) => String(x.id) === el.dataset.msg); if (msg) openMessageActions(msg, reload);
+      const msg = current.find((x) => String(x.id) === el.dataset.msg); if (msg) openMessageActions(msg, reload, () => startReply(msg));
     });
+    box.querySelectorAll(".reply-quote[data-jump]").forEach((el) => el.onclick = (e) => { e.stopPropagation(); jumpToMessage(el.dataset.jump); });
+    box.querySelectorAll("[data-readby]").forEach((el) => el.onclick = (e) => { e.stopPropagation(); const msg = current.find((x) => String(x.id) === el.dataset.readby); if (msg) openReadBy(chatId, msg); });
     box.querySelectorAll("[data-prof]").forEach((el) => el.onclick = () => openChatProfile(chatId, el.dataset.prof));
     box.scrollTop = box.scrollHeight;
   };
@@ -680,8 +726,10 @@ async function renderChat(chatId) {
   const send = async () => {
     const inp = $("#msgInput"); const text = inp.value.trim(); if (!text) return;
     const mentions = finalizeMentions(text);
+    const rt = replyingTo ? replyingTo.id : null;
     inp.value = ""; pendingMentions = []; hideMenu(); inp.focus();
-    const r = await store.sendMessage(chatId, text, null, mentions);
+    replyingTo = null; renderReplyBar();
+    const r = await store.sendMessage(chatId, text, null, mentions, rt);
     if (!r.ok) { toast(r.error || "Couldn't send."); return; }
     await reload();
     store.loadChats();
@@ -709,8 +757,10 @@ async function renderChat(chatId) {
     if (!up.ok) return toast(up.error || "Upload failed.");
     const inp = $("#msgInput"); const text = inp.value.trim();
     const mentions = finalizeMentions(text);
+    const rt = replyingTo ? replyingTo.id : null;
     inp.value = ""; pendingMentions = []; hideMenu();
-    const r = await store.sendMessage(chatId, text, [up.attachment], mentions);
+    replyingTo = null; renderReplyBar();
+    const r = await store.sendMessage(chatId, text, [up.attachment], mentions, rt);
     if (!r.ok) return toast(r.error || "Couldn't send.");
     await reload(); store.loadChats();
   };
@@ -783,19 +833,24 @@ function msgPreview(m) {
   return "(no text)";
 }
 
-function openMessageActions(msg, reload) {
+function openMessageActions(msg, reload, onReply) {
   const isPinned = !!msg.pinnedAt;
-  const pinRow = `<div style="margin-top:12px"><button class="btn ghost sm" id="emPin">${isPinned ? "📌 Unpin from chat" : "📌 Pin to chat"}</button></div>`;
-  const wirePin = () => { $("#emPin").onclick = async () => {
-    const r = await store.pinMessage(msg.id, !isPinned); closeModal();
-    if (r.ok) { reload(); toast(isPinned ? "Unpinned." : "Pinned."); } else toast(r.error || "Couldn't pin.");
-  }; };
+  const actionRow = `<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+    ${onReply ? `<button class="btn ghost sm" id="emReply">↩ Reply</button>` : ""}
+    <button class="btn ghost sm" id="emPin">${isPinned ? "📌 Unpin from chat" : "📌 Pin to chat"}</button></div>`;
+  const wireCommon = () => {
+    $("#emPin").onclick = async () => {
+      const r = await store.pinMessage(msg.id, !isPinned); closeModal();
+      if (r.ok) { reload(); toast(isPinned ? "Unpinned." : "Pinned."); } else toast(r.error || "Couldn't pin.");
+    };
+    if ($("#emReply") && onReply) $("#emReply").onclick = () => { closeModal(); onReply(); };
+  };
 
   if (msg.mine) {
     modal("Your message", `
       <textarea id="emBody" rows="3">${esc(msg.body)}</textarea>
-      <div class="hint" style="margin-top:6px">Edit your message, pin it, or delete it for everyone in the chat.</div>
-      ${pinRow}
+      <div class="hint" style="margin-top:6px">Edit your message, reply, pin it, or delete it for everyone in the chat.</div>
+      ${actionRow}
     `, `<button class="btn danger" id="emDel" style="margin-right:auto">Delete</button><button class="btn ghost" data-close>Cancel</button><button class="btn" id="emSave">Save edit</button>`);
     $("#emSave").onclick = async () => {
       const v = $("#emBody").value.trim();
@@ -810,11 +865,24 @@ function openMessageActions(msg, reload) {
     const s = store.chatSender(msg.chatId, msg.sender);
     modal("Message", `
       <div class="mail-preview"><b>${esc(s.name)}</b><div style="margin-top:4px">${msg.body ? renderMsgBody(msg.body, msg.mentions) : esc(msgPreview(msg))}</div></div>
-      <div class="hint" style="margin-top:6px">Pin this message to the top of the chat for everyone.</div>
-      ${pinRow}
+      <div class="hint" style="margin-top:6px">Reply to this message, or pin it to the top of the chat.</div>
+      ${actionRow}
     `, `<button class="btn" data-close>Close</button>`);
   }
-  wirePin();
+  wireCommon();
+}
+
+// "Read by" list for a group message: who has seen it (last_read_at ≥ the message),
+// and who hasn't yet.
+function openReadBy(chatId, m) {
+  const c = store.chatMeta(chatId); const os = (c && c.members) || [];
+  const read = [], unread = [];
+  os.forEach((o) => { (o.lastReadAt && new Date(o.lastReadAt).getTime() >= m.at ? read : unread).push(o); });
+  const row = (o, tag) => `<div class="bal-row">${avatarEl(o)}<div class="grow"><b>${esc(o.name)}</b>${o.username ? ` <span class="exp-meta">@${esc(o.username)}</span>` : ""}</div>${tag}</div>`;
+  modal("Read by", `
+    <div class="card" style="padding:6px 0">${read.length ? read.map((o) => row(o, `<span class="exp-meta" style="color:var(--brand)">✓✓ read</span>`)).join("") : `<div class="exp-meta" style="padding:10px 14px">No one has read it yet.</div>`}</div>
+    ${unread.length ? `<h3 style="margin:16px 0 8px">Not yet</h3><div class="card" style="padding:6px 0">${unread.map((o) => row(o, `<span class="exp-meta">✓ sent</span>`)).join("")}</div>` : ""}
+  `, `<button class="btn" data-close>Close</button>`);
 }
 
 // Full list of a chat's pinned messages (works for every chat type — DMs included).
@@ -1184,8 +1252,25 @@ async function renderPoll(pollId) {
     const responded = d.participants.filter((p) => p.status !== "invited").length;
     const declined = d.participants.filter((p) => p.status === "declined");
 
+    // Human line about how/when this poll closed (or is closing).
+    let closeLine;
+    if (d.closed) {
+      const when = d.closed_at ? fmtDayTime(d.closed_at) : "";
+      if (d.closed_reason === "runoff") closeLine = `Closed for a runoff${when ? " on " + when : ""}`;
+      else if (d.closed_by && d.closed_by.name) closeLine = `Closed manually by ${esc(d.closed_by.name)}${when ? " on " + when : ""}`;
+      else closeLine = `Closed${when ? " on " + when : ""}`;
+    } else if (ended) {
+      closeLine = `Voting ended by its deadline${d.deadline ? " on " + fmtDayTime(d.deadline) : ""}`;
+    } else if (d.deadline) {
+      closeLine = `Open · vote by ${fmtDayTime(d.deadline)}`;
+    } else {
+      closeLine = "Open · no deadline";
+    }
+
     body.innerHTML = `
-      <div class="exp-meta" style="margin-bottom:10px">${status} · by ${esc(d.creator ? d.creator.name : "someone")}${d.deadline ? ` · ${resolved ? "closed" : "vote by"} ${fmtDayTime(d.deadline)}` : ""} · ${single ? "single choice" : "multiple choice"} · anonymous</div>
+      <div class="exp-meta" style="margin-bottom:4px">${status} · ${single ? "single choice" : "multiple choice"} · anonymous</div>
+      <div class="exp-meta" style="margin-bottom:4px">🗓 Created ${d.created_at ? fmtDayTime(d.created_at) : "—"} by ${esc(d.creator ? d.creator.name : "someone")}</div>
+      <div class="exp-meta" style="margin-bottom:10px">${resolved ? "🔒" : "🟢"} ${closeLine}</div>
       ${d.parent_poll_id ? `<div class="card" style="margin-bottom:12px">🔁 This is a <b>runoff</b> to break a tie. <a class="prof-link" data-goto="${d.parent_poll_id}">Open the original</a></div>` : ""}
       ${d.runoff_poll_id ? `<div class="card" style="margin-bottom:12px">⚖️ There was a <b>tie</b> — a runoff poll was created. <a class="prof-link" data-goto="${d.runoff_poll_id}">Open the runoff</a></div>` : ""}
       ${d.my_status === "declined" ? `<div class="disabled-note" style="margin-bottom:12px">You declined this poll.</div>` : ""}
@@ -3066,7 +3151,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-12b · back-button spacing matches Messages (8px above title)";
+const BUILD = "2026-08-12c · chat: date dividers, reply-to, live read receipts · polls: created/closed metadata (who + manual vs deadline)";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }

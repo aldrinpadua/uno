@@ -428,7 +428,7 @@ class CloudStore {
     if (meta && meta.clearedAt) q = q.gt("created_at", meta.clearedAt); // hide messages I cleared
     const { data, error } = await q;
     if (error) { console.error("[cloud] load messages failed:", error.message); return []; }
-    return (data || []).map((m) => ({ id: m.id, chatId: m.chat_id, sender: m.sender, mine: m.sender === myId, body: m.body || "", deleted: !!m.deleted, editedAt: m.edited_at || null, attachments: m.attachments || null, mentions: m.mentions || null, at: m.created_at ? new Date(m.created_at).getTime() : 0, pinnedAt: m.pinned_at ? new Date(m.pinned_at).getTime() : null, pinnedBy: m.pinned_by || null }));
+    return (data || []).map((m) => ({ id: m.id, chatId: m.chat_id, sender: m.sender, mine: m.sender === myId, body: m.body || "", deleted: !!m.deleted, editedAt: m.edited_at || null, attachments: m.attachments || null, mentions: m.mentions || null, at: m.created_at ? new Date(m.created_at).getTime() : 0, pinnedAt: m.pinned_at ? new Date(m.pinned_at).getTime() : null, pinnedBy: m.pinned_by || null, replyTo: m.reply_to || null }));
   }
   // Pin/unpin a message (any chat member may; capped at 15/chat server-side).
   async pinMessage(messageId, pin) {
@@ -437,14 +437,14 @@ class CloudStore {
     if (data && data.ok === false) return data;
     return { ok: true };
   }
-  async sendMessage(chatId, body, attachments, mentions) {
+  async sendMessage(chatId, body, attachments, mentions, replyTo) {
     const meta = this.chatMeta(chatId);
     if (meta && meta.disabled) return { ok: false, error: "This person is no longer on UNO — messaging is disabled." };
     const text = (body || "").trim();
     const atts = (attachments && attachments.length) ? attachments : null;
     const mens = (mentions && mentions.length) ? mentions : null;
     if (!text && !atts) return { ok: false, error: "Empty message." };
-    const { error } = await this.sb.from("messages").insert({ chat_id: chatId, sender: myId, body: text || null, attachments: atts, mentions: mens });
+    const { error } = await this.sb.from("messages").insert({ chat_id: chatId, sender: myId, body: text || null, attachments: atts, mentions: mens, reply_to: replyTo || null });
     if (error) return { ok: false, error: error.message };
     return { ok: true };
   }
@@ -622,6 +622,7 @@ class CloudStore {
       this._rtChannel = this.sb.channel("uno-messages")
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, (p) => this._onMessageEvent(p))
         .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages" }, (p) => this._onMessageEvent(p))
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "chat_members" }, (p) => this._onMemberEvent(p))
         .subscribe();
     } catch (e) { console.error("[cloud] realtime subscribe failed:", e.message || e); }
   }
@@ -642,6 +643,16 @@ class CloudStore {
     }
     this._notify();
     this.messageListeners.forEach((fn) => { try { fn({ chatId, eventType: payload.eventType }); } catch {} });
+  }
+  // Someone's last_read_at changed — if it's the chat I'm viewing, refresh members
+  // so read receipts (the ticks on my messages) update live.
+  async _onMemberEvent(payload) {
+    const row = payload.new || payload.old; if (!row) return;
+    if (row.user_id === myId) return;             // my own read echoes back — ignore (prevents a loop)
+    const chatId = row.chat_id;
+    if (this.activeChat !== chatId) return;      // only care about the open thread
+    await this.loadChats();                       // pulls fresh members[].lastReadAt
+    this.messageListeners.forEach((fn) => { try { fn({ chatId, eventType: "receipts" }); } catch {} });
   }
   async markChatRead(chatId) {
     const c = this.chatMeta(chatId); if (c) c.unread = 0; this._notify();
