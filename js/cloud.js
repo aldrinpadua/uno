@@ -556,9 +556,11 @@ class CloudStore {
   async addPollParticipants(pollId, userIds, ledgerIds) {
     const { data, error } = await this.sb.rpc("add_poll_participants", { p_poll: pollId, p_users: userIds || [], p_ledgers: ledgerIds || [] });
     if (error || !(data && data.ok)) return { ok: false, error: (data && data.error) || error?.message || "Failed." };
-    this._try("poll invite email", () => this.sb.functions.invoke("notify-poll", { body: { pollId, event: "invite" } }));
+    const added = Array.isArray(data.added) ? data.added : [];
+    // email ONLY the people just added (not everyone still pending)
+    if (added.length) this._try("poll invite email", () => this.sb.functions.invoke("notify-poll", { body: { pollId, event: "invite-users", userIds: added } }));
     await this.loadPolls();
-    return { ok: true };
+    return { ok: true, added: added.length };
   }
   async removePollParticipant(pollId, userId) {
     const { data, error } = await this.sb.rpc("remove_poll_participant", { p_poll: pollId, p_user: userId });

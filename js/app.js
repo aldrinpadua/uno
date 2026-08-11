@@ -3175,7 +3175,7 @@ function addAdminNav() {
   nav.appendChild(b);
 }
 
-const BUILD = "2026-08-12d · edit poll participants (add/remove) · brighter read-receipt ticks";
+const BUILD = "2026-08-12e · poll participant-add emails ONLY the freshly-added people";
 // Reveal the app only after boot has decided what to show (login vs. app), so a
 // refresh on the sign-in screen never flashes the static shell underneath.
 function revealApp() { document.documentElement.classList.remove("booting"); }
